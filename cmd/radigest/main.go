@@ -24,6 +24,7 @@ func main() {
 	maxLen    := flag.Int("max", 1<<30, "maximum fragment length")
 	gffPath   := flag.String("gff",  "fragments.gff3", "output GFF3")
 	jsonPath  := flag.String("json", "", "write run summary JSON")
+	chunkSz   := flag.Int("chunk", 8<<20, "chunk size (bp) sent to each worker")
 	threads   := flag.Int("threads", runtime.NumCPU(), "worker goroutines")
 	flag.Parse()
 
@@ -74,6 +75,18 @@ func main() {
 		}
 	}()
 
+	for rec := range faCh {
+		// split sequence into windows of *chunkSz bases
+		for from := 0; from < len(rec.Seq); from += *chunkSz {
+			to := from + *chunkSz
+			if to > len(rec.Seq) { to = len(rec.Seq) }
+			jobs <- fasta.Record{
+				ID:  rec.ID,
+				Seq: rec.Seq[from:to],
+			}
+		}
+	}
+	
 	for rec := range faCh {
 		jobs <- rec
 	}
