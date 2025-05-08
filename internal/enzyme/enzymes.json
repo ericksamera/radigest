@@ -1,0 +1,6 @@
+[
+    { "name": "EcoRI", "site": "G^AATTC"},
+    { "name": "MseI",  "site": "T^TAA"},
+    { "name": "PstI",  "site": "CTGCA^G"}
+]
+  
