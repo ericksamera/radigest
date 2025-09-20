@@ -27,4 +27,5 @@ go.work.sum
 *.fa*
 *.fna*
 *.gff3*
-*.txt*
+
+*.go.txt

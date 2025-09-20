@@ -26,13 +26,15 @@ func CompileMask(site string) []uint8 {
 }
 
 // MatchMask returns true iff window matches the compiled mask.
+// FASTA reader already upper-cases sequences; avoid extra branches here.
 func MatchMask(mask []uint8, window []byte) bool {
-	for i, m := range mask {
-		b := window[i]
-		if b >= 'a' && b <= 'z' {
-			b -= 'a' - 'A'
-		}
-		if m&codeMap[b] == 0 {
+	n := len(mask)
+	// fast reject on last position
+	if codeMap[window[n-1]]&mask[n-1] == 0 {
+		return false
+	}
+	for i := 0; i < n-1; i++ {
+		if codeMap[window[i]]&mask[i] == 0 {
 			return false
 		}
 	}

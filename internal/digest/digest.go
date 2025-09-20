@@ -1,22 +1,11 @@
 package digest
 
 import (
-	"sort"
-	"sync"
 	"strings"
+	"sync"
 
 	"radigest/internal/enzyme"
 )
-
-var (
-	intSlicePool = sync.Pool{
-		New: func() any { return make([]int, 0, 1024) },
-	}
-	cutSlicePool = sync.Pool{
-		New: func() any { return make([]cut, 0, 1024) },
-	}
-)
-
 
 // Fragment is half-open, 0-based [Start, End).
 type Fragment struct {
@@ -24,79 +13,124 @@ type Fragment struct {
 	End   int
 }
 
-type cut struct {
-	pos int
-	enz int
+type matcher struct {
+	mask   []uint8
+	offset int
 }
 
-// Digest keeps only A-B or B-A fragments whose length ∈ [min,max].
-// The first two enzymes in ens are taken as A and B.
-func Digest(seq []byte, ens []enzyme.Enzyme, min, max int) []Fragment {
-	if len(ens) < 2 {
+// Plan precompiles up to two enzymes (A,B) for fast reuse.
+type Plan struct {
+	m [2]matcher // m[0] = A (required), m[1] = B (optional)
+}
+
+// NewPlan compiles the first one or two enzymes.
+func NewPlan(ens []enzyme.Enzyme) Plan {
+	var p Plan
+	n := 2
+	if len(ens) < n {
+		n = len(ens)
+	}
+	for i := 0; i < n; i++ {
+		e := ens[i]
+		site := e.Recognition
+		offset := e.CutIndex
+		if idx := strings.IndexByte(site, '^'); idx >= 0 {
+			site = site[:idx] + site[idx+1:]
+			offset = idx
+		} else if offset == 0 {
+			offset = len(site) / 2
+		}
+		p.m[i] = matcher{
+			mask:   enzyme.CompileMask(site),
+			offset: offset,
+		}
+	}
+	return p
+}
+
+var intSlicePool = sync.Pool{
+	New: func() any { return make([]int, 0, 1024) },
+}
+
+// Digest supports:
+//   • single‑enzyme mode (only A configured): consecutive A cuts
+//   • double‑enzyme mode (A,B): adjacent AB or BA only
+func (p Plan) Digest(seq []byte, min, max int) []Fragment {
+	if p.m[0].mask == nil { // no enzymes compiled
 		return nil
 	}
 
-	// pre-compile once
-	type matcher struct {
-		mask   []uint8
-		offset int
-	}
-	m := make([]matcher, len(ens))
+	// Scan for A and B cuts (if B is present). Slices are naturally sorted.
+	aCuts := intSlicePool.Get().([]int)[:0]
+	bCuts := intSlicePool.Get().([]int)[:0]
+	defer func() {
+		intSlicePool.Put(aCuts[:0])
+		intSlicePool.Put(bCuts[:0])
+	}()
 
-	for i, e := range ens {
-		site := e.Recognition
-		offset := e.CutIndex                              // default
-
-		if idx := strings.IndexByte(site, '^'); idx >= 0 { // caret style
-			site = site[:idx] + site[idx+1:]
-			offset = idx
-		} else if offset == 0 {                            // no caret + no CutIndex
-			offset = len(site) / 2                        // mid-site fallback
-		}
-
-		m[i].mask = enzyme.CompileMask(site)
-		m[i].offset = offset
-	}
-
-	// collect cuts per enzyme
-	cutsByEnz := make([][]int, len(ens))
-	for i := range cutsByEnz {                    // pooled [][]int
-		cutsByEnz[i] = intSlicePool.Get().([]int)[:0]
-	}
-	for i, mat := range m {
+	// A cuts
+	{
+		mat := p.m[0]
 		n := len(mat.mask)
-		for p := 0; p <= len(seq)-n; p++ {
-			if enzyme.MatchMask(mat.mask, seq[p:p+n]) {
-				cutsByEnz[i] = append(cutsByEnz[i], p+mat.offset)
+		if n > 0 && len(seq) >= n {
+			for pos := 0; pos <= len(seq)-n; pos++ {
+				if enzyme.MatchMask(mat.mask, seq[pos:pos+n]) {
+					aCuts = append(aCuts, pos+mat.offset)
+				}
 			}
 		}
 	}
 
-	// merge → one sorted slice
-	all := cutSlicePool.Get().([]cut)[:0]          // pooled []cut
-	for enzID, slice := range cutsByEnz {
-		for _, c := range slice {
-			all = append(all, cut{pos: c, enz: enzID})
+	// Single‑enzyme mode
+	if p.m[1].mask == nil {
+		out := make([]Fragment, 0, len(aCuts))
+		for k := 1; k < len(aCuts); k++ {
+			if ln := aCuts[k] - aCuts[k-1]; ln >= min && ln <= max {
+				out = append(out, Fragment{Start: aCuts[k-1], End: aCuts[k]})
+			}
 		}
+		return out
 	}
-	sort.Slice(all, func(i, j int) bool { return all[i].pos < all[j].pos })
 
-	// keep only AB / BA fragments
-	aID, bID := 0, 1
-	out := make([]Fragment, 0, len(all))
-	for i := 1; i < len(all); i++ {
-		l, r := all[i-1], all[i]
-		if (l.enz == aID && r.enz == bID) || (l.enz == bID && r.enz == aID) {
-			if ln := r.pos - l.pos; ln >= min && ln <= max {
-				out = append(out, Fragment{Start: l.pos, End: r.pos})
+	// Double‑enzyme mode: also collect B cuts
+	{
+		mat := p.m[1]
+		n := len(mat.mask)
+		if n > 0 && len(seq) >= n {
+			for pos := 0; pos <= len(seq)-n; pos++ {
+				if enzyme.MatchMask(mat.mask, seq[pos:pos+n]) {
+					bCuts = append(bCuts, pos+mat.offset)
+				}
 			}
 		}
 	}
-	// --- recycle big temps --------------------------------------------------
-	for i := range cutsByEnz {
-		intSlicePool.Put(cutsByEnz[i][:0])
+
+	// Linear two‑way merge over aCuts and bCuts → emit adjacent AB/BA only.
+	out := make([]Fragment, 0, (len(aCuts)+len(bCuts))/2)
+	i, j := 0, 0
+	prevType := -1 // 0 = A, 1 = B
+	prevPos := 0
+
+	for i < len(aCuts) || j < len(bCuts) {
+		curType, curPos := 0, 0
+		if i < len(aCuts) && (j >= len(bCuts) || aCuts[i] < bCuts[j]) {
+			curType, curPos = 0, aCuts[i]
+			i++
+		} else {
+			curType, curPos = 1, bCuts[j]
+			j++
+		}
+		if prevType != -1 && prevType != curType {
+			if ln := curPos - prevPos; ln >= min && ln <= max {
+				out = append(out, Fragment{Start: prevPos, End: curPos})
+			}
+		}
+		prevType, prevPos = curType, curPos
 	}
-	cutSlicePool.Put(all[:0])
-	
 	return out
+}
+
+// Back‑compat convenience: compile plan per call.
+func Digest(seq []byte, ens []enzyme.Enzyme, min, max int) []Fragment {
+	return NewPlan(ens).Digest(seq, min, max)
 }

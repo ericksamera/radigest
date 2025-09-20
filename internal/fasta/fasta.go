@@ -3,7 +3,7 @@ package fasta
 import (
 	"bufio"
 	"bytes"
-	// "fmt"
+	"compress/gzip"
 	"io"
 	"os"
 )
@@ -12,24 +12,50 @@ const bufSize = 4 << 20 // 4 MiB
 
 // Record is one FASTA entry (whole chromosome or contig).
 type Record struct {
-	ID   string
-	Seq  []byte // upper-case, no newlines; reused – copy if you need to keep it
+	ID  string
+	Seq []byte // upper-case, no newlines; reused – copy if you need to keep it
 }
 
-// Stream reads `path` and sends each record down the chan.
+// Stream reads `path` (file path or "-" for STDIN) and sends each record.
 // It closes the channel when done or on first error (returned).
 func Stream(path string, out chan<- Record) error {
-	f, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
+	var src io.Reader
 
-	r := bufio.NewReaderSize(f, bufSize)
+	if path == "-" {
+		br := bufio.NewReader(os.Stdin)
+		if magic, _ := br.Peek(2); len(magic) == 2 && magic[0] == 0x1f && magic[1] == 0x8b {
+			gz, err := gzip.NewReader(br)
+			if err != nil {
+				return err
+			}
+			defer gz.Close()
+			src = gz
+		} else {
+			src = br
+		}
+	} else {
+		f, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		br := bufio.NewReader(f)
+		if magic, _ := br.Peek(2); len(magic) == 2 && magic[0] == 0x1f && magic[1] == 0x8b {
+			gz, err := gzip.NewReader(br)
+			if err != nil {
+				return err
+			}
+			defer gz.Close()
+			src = gz
+		} else {
+			src = br
+		}
+	}
+
+	r := bufio.NewReaderSize(src, bufSize)
 	var (
 		id   []byte
 		seq  []byte
-		line []byte
 	)
 	flush := func() {
 		if id != nil {
@@ -38,7 +64,7 @@ func Stream(path string, out chan<- Record) error {
 		}
 	}
 	for {
-		line, err = r.ReadBytes('\n')
+		line, err := r.ReadBytes('\n')
 		if err != nil && err != io.EOF {
 			return err
 		}
@@ -47,7 +73,7 @@ func Stream(path string, out chan<- Record) error {
 		}
 		if len(line) > 0 && line[0] == '>' { // header
 			flush()
-			id = bytes.Fields(line[1:])[0] // grab up-to-first-space
+			id = bytes.Fields(line[1:])[0] // up to first space
 		} else {
 			seq = append(seq, line...)
 		}
@@ -58,15 +84,3 @@ func Stream(path string, out chan<- Record) error {
 		}
 	}
 }
-
-// Example usage (in cmd/main.go):
-//
-// ch := make(chan fasta.Record, 2)
-// go func() {
-//     if err := fasta.Stream(fastaPath, ch); err != nil {
-//         log.Fatal(err)
-//     }
-// }()
-// for rec := range ch {
-//     // hand rec.Seq to digest workers
-// }

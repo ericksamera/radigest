@@ -14,9 +14,9 @@ func TestCollector(t *testing.T) {
 	in, done, err := New(tmp.Name())
 	if err != nil { t.Fatal(err) }
 
-	// send two chromosomes
-	in <- Msg{"chr1", []digest.Fragment{{Start: 0, End: 5}}}
-	in <- Msg{"chr2", []digest.Fragment{
+	// send two chromosomes in deterministic order (Idx 0,1)
+	in <- Msg{Idx: 0, Chr: "chr1", Frags: []digest.Fragment{{Start: 0, End: 5}}}
+	in <- Msg{Idx: 1, Chr: "chr2", Frags: []digest.Fragment{
 		{Start: 10, End: 15}, {Start: 20, End: 26},
 	}}
 	close(in)
