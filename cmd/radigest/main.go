@@ -19,14 +19,14 @@ import (
 )
 
 var (
-	version = "v1.2.1"
+	version = "v1.3.1"
 )
 
 func main() {
 	// ---- CLI flags ----------------------------------------------------------
 	fastaPath := flag.String("fasta", "", "reference FASTA file")
 	enzFlag := flag.String("enzymes", "", "comma-separated enzyme names (≥1; first two form the AB pair if present)")
-	minLen := flag.Int("min", 1, "minimum fragment length (bp)") // default now 1
+	minLen := flag.Int("min", 1, "minimum fragment length (bp)")
 	maxLen := flag.Int("max", 1<<30, "maximum fragment length (bp)")
 	gffPath := flag.String("gff", "fragments.gff3", "output GFF3 file (path or '-' for stdout)")
 	jsonPath := flag.String("json", "", "optional: write run summary JSON here")
