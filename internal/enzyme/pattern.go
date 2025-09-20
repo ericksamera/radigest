@@ -1,7 +1,6 @@
 package enzyme
 
-// StripCaret removes “^” from the recognition site and
-// returns (cleanSite, cutOffset).
+// StripCaret removes “^” from the recognition site and returns (cleanSite, cutOffset).
 func StripCaret(recog string) (string, int) {
 	for i := 0; i < len(recog); i++ {
 		if recog[i] == '^' {
@@ -25,16 +24,28 @@ func CompileMask(site string) []uint8 {
 	return m
 }
 
+// baseMaskWin maps a reference base to its mask for matching.
+// NOTE: We *block* 'N' in the reference (mask=0) so 'N' never matches any site.
+func baseMaskWin(b byte) uint8 {
+	if b >= 'a' && b <= 'z' { b -= 'a' - 'A' }
+	if b == 'N' {
+		return 0
+	}
+	if m, ok := codeMap[b]; ok {
+		return m
+	}
+	return 0 // anything unknown in the sequence fails to match
+}
+
 // MatchMask returns true iff window matches the compiled mask.
-// FASTA reader already upper-cases sequences; avoid extra branches here.
 func MatchMask(mask []uint8, window []byte) bool {
 	n := len(mask)
 	// fast reject on last position
-	if codeMap[window[n-1]]&mask[n-1] == 0 {
+	if baseMaskWin(window[n-1])&mask[n-1] == 0 {
 		return false
 	}
 	for i := 0; i < n-1; i++ {
-		if codeMap[window[i]]&mask[i] == 0 {
+		if baseMaskWin(window[i])&mask[i] == 0 {
 			return false
 		}
 	}

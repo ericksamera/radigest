@@ -15,19 +15,18 @@ import (
 	"radigest/internal/digest"
 	"radigest/internal/enzyme"
 	"radigest/internal/fasta"
+	"radigest/internal/sim"
 )
 
 var (
-	version = "dev"
-	commit  = "none"
-	date    = "unknown"
+	version = "v1.2.1"
 )
 
 func main() {
 	// ---- CLI flags ----------------------------------------------------------
-	fastaPath := flag.String("fasta", "", "reference FASTA file (required)")
+	fastaPath := flag.String("fasta", "", "reference FASTA file")
 	enzFlag := flag.String("enzymes", "", "comma-separated enzyme names (≥1; first two form the AB pair if present)")
-	minLen := flag.Int("min", 0, "minimum fragment length (bp)")
+	minLen := flag.Int("min", 1, "minimum fragment length (bp)") // default now 1
 	maxLen := flag.Int("max", 1<<30, "maximum fragment length (bp)")
 	gffPath := flag.String("gff", "fragments.gff3", "output GFF3 file (path or '-' for stdout)")
 	jsonPath := flag.String("json", "", "optional: write run summary JSON here")
@@ -36,15 +35,29 @@ func main() {
 	showVer := flag.Bool("version", false, "print version and exit")
 	listEns := flag.Bool("list-enzymes", false, "list available enzyme names and exit")
 
+	// double-digest behavior & validation
+	allowSame := flag.Bool("allow-same", false, "double digest: also keep AA/BB neighbors (default AB/BA only)")
+	strictCuts := flag.Bool("strict-cuts", false, "error if an enzyme lacks a caret and CutIndex==0 (no mid-site fallback)")
+
+	// synthetic genome flags
+	simLen := flag.Int("sim-len", 0, "synthesize a single-chromosome genome of this length (bp) instead of reading -fasta")
+	simGC := flag.Float64("sim-gc", 0.50, "target GC fraction in [0,1] for -sim-len")
+	simSeed := flag.Int64("sim-seed", 1, "PRNG seed for -sim-len (0 ⇒ time-based)")
+
 	flag.Usage = func() {
 		b := &strings.Builder{}
+		fmt.Fprintln(b, "Author:  Erick Samera (erick.samera@kpu.ca)")
+		fmt.Fprintln(b, "License: MIT")
+		fmt.Fprintln(b, "Version:", version)
+		fmt.Fprintln(b)
 		fmt.Fprintln(b, "radigest — in-silico single/double digest and GFF3 fragment export")
 		fmt.Fprintln(b)
 		fmt.Fprintln(b, "Usage:")
 		fmt.Fprintln(b, "  radigest -fasta <ref.fa|-> -enzymes <E1[,E2[,E3...]]> [options]")
+		fmt.Fprintln(b, "  radigest -sim-len <bp> -sim-gc <0..1> -enzymes <E1[,E2]> [options]")
 		fmt.Fprintln(b)
 		fmt.Fprintln(b, "Required flags:")
-		fmt.Fprintln(b, "  -fasta, -enzymes")
+		fmt.Fprintln(b, "  -enzymes, and exactly one of -fasta or -sim-len")
 		fmt.Fprintln(b)
 		fmt.Fprintln(b, "Options:")
 		flag.CommandLine.SetOutput(b)
@@ -58,13 +71,15 @@ func main() {
 		fmt.Fprintln(b, "  radigest -fasta ref.fa -enzymes EcoRI -gff out.gff3")
 		fmt.Fprintln(b, "  # Double digest with size selection + JSON summary")
 		fmt.Fprintln(b, "  radigest -fasta ref.fa -enzymes EcoRI,MseI -min 100 -max 800 -json run.json")
-		fmt.Fprint(os.Stderr, b.String()) // avoid extra blank line
+		fmt.Fprintln(b, "  # Simulate a 10 Mb genome at 42% GC and digest (chromosome name is always chr1)")
+		fmt.Fprintln(b, "  radigest -sim-len 10000000 -sim-gc 0.42 -enzymes EcoRI,MseI -gff out.gff3")
+		fmt.Fprint(os.Stderr, b.String())
 	}
 
 	flag.Parse()
 
 	if *showVer {
-		fmt.Printf("radigest %s (commit %s, %s)\n", version, commit, date)
+		fmt.Printf("radigest %s\n", version)
 		return
 	}
 	if *listEns {
@@ -78,34 +93,39 @@ func main() {
 		}
 		return
 	}
-	if *fastaPath == "" || *enzFlag == "" {
-		fmt.Fprintln(os.Stderr, "error: flags -fasta and -enzymes are required")
+
+	// ---- validation ---------------------------------------------------------
+	if *enzFlag == "" {
+		fmt.Fprintln(os.Stderr, "error: -enzymes is required")
 		flag.Usage()
 		os.Exit(2)
 	}
+	if (*fastaPath == "" && *simLen <= 0) || (*fastaPath != "" && *simLen > 0) {
+		fmt.Fprintln(os.Stderr, "error: use exactly one of -fasta or -sim-len")
+		flag.Usage()
+		os.Exit(2)
+	}
+	if *minLen > *maxLen {
+		log.Fatalf("invalid range: -min (%d) > -max (%d)", *minLen, *maxLen)
+	}
 
-	// ---- build enzyme slice -------------------------------------------------
+	// ---- compile enzymes ----------------------------------------------------
 	var ens []enzyme.Enzyme
 	for _, name := range strings.Split(*enzFlag, ",") {
-		n := strings.TrimSpace(name) // forgive spaces
+		n := strings.TrimSpace(name)
 		e, ok := enzyme.DB[n]
 		if !ok {
 			log.Fatalf("unknown enzyme %q", name)
 		}
 		ens = append(ens, e)
 	}
-	if len(ens) < 1 {
-		log.Fatal("need at least one enzyme")
-	}
 	if len(ens) >= 2 && ens[0].Name == ens[1].Name {
 		log.Fatalf("first two enzymes must differ (got %s,%s)", ens[0].Name, ens[1].Name)
 	}
-	if *minLen > *maxLen {
-		log.Fatalf("invalid range: -min (%d) > -max (%d)", *minLen, *maxLen)
-	}
-
-	// ---- compile plan once (perf) ------------------------------------------
-	plan := digest.NewPlan(ens)
+	plan := digest.NewPlanWithOptions(ens, digest.Options{
+		AllowSame:  *allowSame,
+		StrictCuts: *strictCuts,
+	})
 
 	// ---- start collector ----------------------------------------------------
 	cIn, done, err := collector.New(*gffPath)
@@ -113,7 +133,7 @@ func main() {
 		log.Fatalf("collector: %v", err)
 	}
 
-	// ---- worker pool (deterministic order via job idx) ---------------------
+	// ---- worker pool --------------------------------------------------------
 	type job struct {
 		idx int
 		rec fasta.Record
@@ -126,7 +146,6 @@ func main() {
 			defer wg.Done()
 			for j := range jobs {
 				frags := plan.Digest(j.rec.Seq, *minLen, *maxLen)
-				// send even if empty to advance deterministic ordering
 				cIn <- collector.Msg{Idx: j.idx, Chr: j.rec.ID, Frags: frags}
 				if *verbose {
 					fmt.Fprintf(os.Stderr, "chr=%s fragments=%d\n", j.rec.ID, len(frags))
@@ -135,28 +154,32 @@ func main() {
 		}()
 	}
 
-	// ---- stream FASTA and feed jobs ----------------------------------------
+	// ---- source: FASTA or synthetic ----------------------------------------
 	faCh := make(chan fasta.Record)
 	go func() {
+		if *simLen > 0 {
+			seq := sim.Make(*simLen, *simGC, *simSeed) // chr1
+			faCh <- fasta.Record{ID: "chr1", Seq: seq}
+			close(faCh)
+			return
+		}
 		if err := fasta.Stream(*fastaPath, faCh); err != nil {
 			log.Fatalf("fasta stream: %v", err)
 		}
-		// Stream closes faCh when done.
 	}()
 	go func() {
 		idx := 0
 		for rec := range faCh {
-			jobs <- job{idx: idx, rec: rec} // whole contig per job
+			jobs <- job{idx: idx, rec: rec}
 			idx++
 		}
 		close(jobs)
 	}()
 
-	// wait for workers, finish collector
+	// ---- wait + finalize ----------------------------------------------------
 	wg.Wait()
 	close(cIn)
 
-	// ---- summary (to stderr so stdout stays pure GFF) ----------------------
 	stats := <-done
 	fmt.Fprintf(os.Stderr, "Fragments kept: %d\nBases covered: %d\nChromosomes: %d\n",
 		stats.TotalFragments, stats.TotalBases, len(stats.PerChr))

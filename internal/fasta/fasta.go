@@ -10,7 +10,6 @@ import (
 
 const bufSize = 4 << 20 // 4 MiB
 
-// Record is one FASTA entry (whole chromosome or contig).
 type Record struct {
 	ID  string
 	Seq []byte // upper-case, no newlines; reused – copy if you need to keep it
@@ -25,9 +24,7 @@ func Stream(path string, out chan<- Record) error {
 		br := bufio.NewReader(os.Stdin)
 		if magic, _ := br.Peek(2); len(magic) == 2 && magic[0] == 0x1f && magic[1] == 0x8b {
 			gz, err := gzip.NewReader(br)
-			if err != nil {
-				return err
-			}
+			if err != nil { return err }
 			defer gz.Close()
 			src = gz
 		} else {
@@ -35,16 +32,12 @@ func Stream(path string, out chan<- Record) error {
 		}
 	} else {
 		f, err := os.Open(path)
-		if err != nil {
-			return err
-		}
+		if err != nil { return err }
 		defer f.Close()
 		br := bufio.NewReader(f)
 		if magic, _ := br.Peek(2); len(magic) == 2 && magic[0] == 0x1f && magic[1] == 0x8b {
 			gz, err := gzip.NewReader(br)
-			if err != nil {
-				return err
-			}
+			if err != nil { return err }
 			defer gz.Close()
 			src = gz
 		} else {
@@ -53,10 +46,8 @@ func Stream(path string, out chan<- Record) error {
 	}
 
 	r := bufio.NewReaderSize(src, bufSize)
-	var (
-		id   []byte
-		seq  []byte
-	)
+	var id, seq []byte
+
 	flush := func() {
 		if id != nil {
 			out <- Record{ID: string(id), Seq: bytes.ToUpper(seq)}
@@ -65,12 +56,11 @@ func Stream(path string, out chan<- Record) error {
 	}
 	for {
 		line, err := r.ReadBytes('\n')
-		if err != nil && err != io.EOF {
-			return err
-		}
-		if len(line) > 0 && line[len(line)-1] == '\n' {
-			line = line[:len(line)-1] // trim newline
-		}
+		if err != nil && err != io.EOF { return err }
+
+		// Trim both '\n' and '\r' (Windows CRLF)
+		line = bytes.TrimRight(line, "\r\n")
+
 		if len(line) > 0 && line[0] == '>' { // header
 			flush()
 			id = bytes.Fields(line[1:])[0] // up to first space

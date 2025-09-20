@@ -1,6 +1,7 @@
 package digest
 
 import (
+	"fmt"
 	"strings"
 	"sync"
 
@@ -18,35 +19,45 @@ type matcher struct {
 	offset int
 }
 
-// Plan precompiles up to two enzymes (A,B) for fast reuse.
-type Plan struct {
-	m [2]matcher // m[0] = A (required), m[1] = B (optional)
+type Options struct {
+	AllowSame  bool // keep AA/BB neighbors in double digest
+	StrictCuts bool // error if site has no caret and CutIndex==0 (mid-site fallback)
 }
 
-// NewPlan compiles the first one or two enzymes.
-func NewPlan(ens []enzyme.Enzyme) Plan {
+// Plan precompiles up to two enzymes (A,B) for fast reuse.
+type Plan struct {
+	m         [2]matcher // m[0] = A (required), m[1] = B (optional)
+	allowSame bool
+}
+
+func NewPlanWithOptions(ens []enzyme.Enzyme, opt Options) Plan {
 	var p Plan
+	p.allowSame = opt.AllowSame
+
 	n := 2
-	if len(ens) < n {
-		n = len(ens)
-	}
+	if len(ens) < n { n = len(ens) }
 	for i := 0; i < n; i++ {
 		e := ens[i]
 		site := e.Recognition
 		offset := e.CutIndex
+		usedFallback := false
 		if idx := strings.IndexByte(site, '^'); idx >= 0 {
 			site = site[:idx] + site[idx+1:]
 			offset = idx
 		} else if offset == 0 {
+			usedFallback = true
 			offset = len(site) / 2
 		}
-		p.m[i] = matcher{
-			mask:   enzyme.CompileMask(site),
-			offset: offset,
+		if opt.StrictCuts && usedFallback {
+			panic(fmt.Sprintf("enzyme %s: no caret and CutIndex==0 (mid-site fallback disabled by -strict-cuts)", e.Name))
 		}
+		p.m[i] = matcher{mask: enzyme.CompileMask(site), offset: offset}
 	}
 	return p
 }
+
+// Back-compat.
+func NewPlan(ens []enzyme.Enzyme) Plan { return NewPlanWithOptions(ens, Options{}) }
 
 var intSlicePool = sync.Pool{
 	New: func() any { return make([]int, 0, 1024) },
@@ -54,7 +65,7 @@ var intSlicePool = sync.Pool{
 
 // Digest supports:
 //   • single‑enzyme mode (only A configured): consecutive A cuts
-//   • double‑enzyme mode (A,B): adjacent AB or BA only
+//   • double‑enzyme mode (A,B): adjacent AB/BA only (or AA/BB too if allowSame)
 func (p Plan) Digest(seq []byte, min, max int) []Fragment {
 	if p.m[0].mask == nil { // no enzymes compiled
 		return nil
@@ -105,27 +116,51 @@ func (p Plan) Digest(seq []byte, min, max int) []Fragment {
 		}
 	}
 
-	// Linear two‑way merge over aCuts and bCuts → emit adjacent AB/BA only.
+	// Merge over positions. If both enzymes cut at the same position,
+	// emit a single zero-length fragment (if allowed by min/max) and
+	// reset adjacency to avoid "bridging" across that coincident cut.
 	out := make([]Fragment, 0, (len(aCuts)+len(bCuts))/2)
 	i, j := 0, 0
-	prevType := -1 // 0 = A, 1 = B
+	prevType := -1 // 0=A, 1=B
 	prevPos := 0
 
 	for i < len(aCuts) || j < len(bCuts) {
-		curType, curPos := 0, 0
-		if i < len(aCuts) && (j >= len(bCuts) || aCuts[i] < bCuts[j]) {
-			curType, curPos = 0, aCuts[i]
+		var pos int
+		if i < len(aCuts) && (j >= len(bCuts) || aCuts[i] <= bCuts[j]) {
+			pos = aCuts[i]
+		} else {
+			pos = bCuts[j]
+		}
+		hasA := i < len(aCuts) && aCuts[i] == pos
+		hasB := j < len(bCuts) && bCuts[j] == pos
+
+		if hasA && hasB {
+			// coincident cuts
+			if 0 >= min && 0 <= max {
+				out = append(out, Fragment{Start: pos, End: pos})
+			}
+			i++
+			j++
+			prevType = -1 // barrier: do not bridge across coincident cuts
+			prevPos = pos
+			continue
+		}
+
+		var curType int
+		if hasA {
+			curType = 0
 			i++
 		} else {
-			curType, curPos = 1, bCuts[j]
+			curType = 1
 			j++
 		}
-		if prevType != -1 && prevType != curType {
-			if ln := curPos - prevPos; ln >= min && ln <= max {
-				out = append(out, Fragment{Start: prevPos, End: curPos})
+
+		if prevType != -1 && (p.allowSame || prevType != curType) {
+			if ln := pos - prevPos; ln >= min && ln <= max {
+				out = append(out, Fragment{Start: prevPos, End: pos})
 			}
 		}
-		prevType, prevPos = curType, curPos
+		prevType, prevPos = curType, pos
 	}
 	return out
 }
