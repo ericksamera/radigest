@@ -1,16 +1,16 @@
 # radigest
 
-Fast in‑silico restriction digest for genomics. Give it a reference FASTA (`.fna(.gz)`) and one or two enzyme names; it scans the genome, applies size selection, and exports fragments as GFF3 for downstream workflows (GBS/ddRAD, probe design, visualization). Fragments are produced deterministically even with multithreading.&#x20;
+Fast in-silico restriction digest for genomics. Give it a reference FASTA (plain or `.gz`) or synthesize one on the fly; pass one or two enzymes; it scans, size-selects, and exports fragments as GFF3 for GBS/ddRAD, probe design, or visualization. Output order is deterministic even with multithreading.
 
 ---
 
 ## Features
 
-* **Single or double digest.** In double‑digest mode only **adjacent AB/BA** fragments are kept; single‑digest uses consecutive A cuts.&#x20;
-* **IUPAC recognition & cut offsets.** Enzyme sites accept degenerate bases; cut position comes from `^` in the site or defaults to mid‑site.&#x20;
-* **Stream‑friendly + fast.** Reads FASTA from a file or `-` (STDIN), auto‑detects `.gz`, uses a worker pool, and writes fragments in a stable order.&#x20;
-* **Clean outputs.** GFF3 lines with `ID=<chr>_<n>;Length=<bp>` attributes; optional machine‑readable JSON summary. Coordinates in GFF are **1‑based closed**.&#x20;
-* **Practical CLI.** `-min/-max` for size selection; `-list-enzymes` to discover supported names; `-threads` and `-v` for control.&#x20;
+* **Single or double digest.** Double-digest keeps **adjacent AB/BA** by default; enable **AA/BB** too with `-allow-same`. Single-digest uses consecutive A cuts.
+* **IUPAC & cut offsets.** Sites accept degenerate codes; the cut index comes from `^` in the site (or mid-site if missing). `-strict-cuts` makes missing carets an error.
+* **Robust FASTA I/O.** Read from a path or `-` (STDIN), auto-detect `.gz`, normalize case, and **trim CRLF**. `N` in the **reference** does **not** match any site.
+* **Synthetic genomes.** Generate a single-chromosome genome named `chr1` with `-sim-len`, `-sim-gc`, `-sim-seed` and digest it directly—no FASTA on disk needed.
+* **Clean outputs.** GFF3 with `ID=<chr>_<n>;Length=<bp>`; optional JSON summary of counts/bases per chromosome. Coordinates are **1-based closed** in GFF (internally 0-based half-open).
 
 ---
 
@@ -20,25 +20,28 @@ Fast in‑silico restriction digest for genomics. Give it a reference FASTA (`.f
 # Single digest (EcoRI) → GFF file
 radigest -fasta ref.fa -enzymes EcoRI -gff fragments.gff3
 
-# Double digest (EcoRI + MseI), size‑select 100–800 bp, and write a JSON summary
+# Double digest with size selection + JSON summary
 radigest -fasta ref.fa -enzymes EcoRI,MseI -min 100 -max 800 -gff fragments.gff3 -json run.json
 
-# Stream a compressed FASTA in, write GFF to stdout
-zcat ref.fa.gz | radigest -fasta - -enzymes EcoRI,MseI -gff -
-```
+# Double digest but ALSO keep AA/BB neighbors
+radigest -fasta ref.fa -enzymes EcoRI,MseI -allow-same -gff fragments.gff3
 
-Enzyme names come from the built‑in database (e.g., `EcoRI`, `MseI`, `MspI`, `HindIII`). Use `-list-enzymes` to see them. The **first two names** define the AB pair; they must differ. Additional names, if provided, are ignored today.&#x20;
+# Simulate a 10 Mb genome at 42% GC and digest
+radigest -sim-len 10000000 -sim-gc 0.42 -sim-seed 123 -enzymes EcoRI,MseI -gff out.gff3
+```
 
 ---
 
-## Command‑line options (most used)
+## CLI (most used)
 
-* `-fasta <path|->` — reference FASTA; `-` means STDIN; `.gz` auto‑detected.&#x20;
-* `-enzymes E1[,E2]` — one (A) or two (A,B) enzymes; AB/BA adjacency enforced in double‑digest.&#x20;
-* `-min/-max` — keep fragments in `[min,max]` bp.&#x20;
-* `-gff <path|->` — GFF3 output file or `-` for STDOUT.&#x20;
-* `-json <path>` — optional run summary (see below).&#x20;
-* `-threads <n>`, `-v`, `-version`, `-list-enzymes`.&#x20;
+* `-fasta <path|->` — reference FASTA; `-` = STDIN; `.gz` auto-detected.
+* `-enzymes E1[,E2]` — one (A) or two (A,B). In double-digest, AB/BA by default.
+* `-min/-max` — keep fragments in `[min,max]` bp (**default min=1**).
+* `-gff <path|->` — GFF3 out; `-` = STDOUT.
+* `-json <path>` — write a run summary (counts, bases, per-chrom stats).
+* `-threads <n>`, `-v`, `-version`, `-list-enzymes`.
+* **Simulation:** `-sim-len <bp>`, `-sim-gc <0..1>`, `-sim-seed <int>` (emits a single `chr1`).
+* **Modes:** `-allow-same` (keep AA/BB in double-digest), `-strict-cuts` (error if a site lacks `^` and would otherwise fall back to mid-site).
 
 ---
 
@@ -46,18 +49,14 @@ Enzyme names come from the built‑in database (e.g., `EcoRI`, `MseI`, `MspI`, `
 
 ### GFF3
 
-One header plus one line per kept fragment:
-
 ```
 ##gff-version 3
-chr1  radigest  fragment  <start>  <end>  .  +  .  ID=chr1_1;Length=123
+chr1	radigest	fragment	<start>	<end>	.	+	.	ID=chr1_1;Length=123
 ```
 
-`start/end` are **1‑based closed**; `Length` is the bp span. Ordering is deterministic per chromosome.&#x20;
+`start/end` are **1-based closed**; `Length` is `end - start + 1`. Ordering is deterministic per chromosome.
 
-### JSON summary
-
-Written when `-json` is set:
+### JSON (optional)
 
 ```json
 {
@@ -66,18 +65,6 @@ Written when `-json` is set:
   "max_length": 800,
   "total_fragments": 123456,
   "total_bases": 7891011,
-  "per_chromosome": {
-    "chr1": {"fragments": 23456, "bases": 3456789}
-  }
+  "per_chromosome": {"chr1": {"fragments": 23456, "bases": 3456789}}
 }
 ```
-
-Field names match the program’s embedded stats (`total_fragments`, `total_bases`, `per_chromosome[chr].{fragments,bases}`).&#x20;
-
----
-
-## Notes for bioinformatics use
-
-* Intended for **GBS/ddRAD** style in‑silico selection and probe/amplicon panel design.
-* Internally uses 0‑based half‑open positions; GFF is 1‑based closed.&#x20;
-* IUPAC matching enables methylation‑insensitive patterns and degenerate sites; cut offsets honor `^`.&#x20;
