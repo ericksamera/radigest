@@ -1,6 +1,6 @@
 # radigest
 
-[![CI](https://img.shields.io/github/actions/workflow/status/KPU-AGC/radigest/ci.yml?branch=main&label=ci)](https://github.com/KPU-AGC/radigest/actions/workflows/ci.yml)
+[![CI](https://img.shields.io/github/actions/workflow/status/ericksamera/radigest/ci.yml?branch=main&label=ci)](https://github.com/KPU-AGC/radigest/actions/workflows/ci.yml)
 [![Go](https://img.shields.io/badge/go-%3E=%201.22-blue)](https://golang.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 
