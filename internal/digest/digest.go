@@ -60,7 +60,10 @@ func NewPlanWithOptions(ens []enzyme.Enzyme, opt Options) Plan {
 func NewPlan(ens []enzyme.Enzyme) Plan { return NewPlanWithOptions(ens, Options{}) }
 
 var intSlicePool = sync.Pool{
-	New: func() any { return make([]int, 0, 1024) },
+	New: func() any {
+		s := make([]int, 0, 1024)
+		return &s
+	},
 }
 
 // Digest supports:
@@ -72,11 +75,17 @@ func (p Plan) Digest(seq []byte, min, max int) []Fragment {
 	}
 
 	// Scan for A and B cuts (if B is present). Slices are naturally sorted.
-	aCuts := intSlicePool.Get().([]int)[:0]
-	bCuts := intSlicePool.Get().([]int)[:0]
+	aBuf := intSlicePool.Get().(*[]int)
+	bBuf := intSlicePool.Get().(*[]int)
+
+	aCuts := (*aBuf)[:0]
+	bCuts := (*bBuf)[:0]
+
 	defer func() {
-		intSlicePool.Put(aCuts[:0])
-		intSlicePool.Put(bCuts[:0])
+		*aBuf = (*aBuf)[:0]
+		*bBuf = (*bBuf)[:0]
+		intSlicePool.Put(aBuf)
+		intSlicePool.Put(bBuf)
 	}()
 
 	// A cuts
