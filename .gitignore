@@ -29,3 +29,4 @@ go.work.sum
 *.gff3*
 
 *.go.txt
+*codebase*

@@ -1,5 +1,10 @@
 # radigest
 
+[![CI](https://img.shields.io/github/actions/workflow/status/KPU-AGC/radigest/ci.yml?branch=main&label=ci)](https://github.com/KPU-AGC/radigest/actions/workflows/ci.yml)
+[![Go](https://img.shields.io/badge/go-%3E=%201.22-blue)](https://golang.org)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+
+
 Fast in-silico restriction digest for genomics. Give it a reference FASTA (plain or `.gz`) or synthesize one on the fly; pass one or two enzymes; it scans, size-selects, and exports fragments as GFF3 for GBS/ddRAD, probe design, or visualization. Output order is deterministic even with multithreading.
 
 ---
