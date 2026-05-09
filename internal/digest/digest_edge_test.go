@@ -3,7 +3,7 @@ package digest
 import (
 	"testing"
 
-	"radigest/internal/enzyme"
+	"github.com/KPU-AGC/radigest/internal/enzyme"
 )
 
 func TestSingleDigest_NoOrOneCutKeepsNone(t *testing.T) {

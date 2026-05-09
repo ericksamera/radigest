@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	"radigest/internal/digest"
+	"github.com/KPU-AGC/radigest/internal/digest"
 )
 
 func TestCollector(t *testing.T) {

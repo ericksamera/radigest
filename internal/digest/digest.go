@@ -5,7 +5,7 @@ import (
 	"strings"
 	"sync"
 
-	"radigest/internal/enzyme"
+	"github.com/KPU-AGC/radigest/internal/enzyme"
 )
 
 // Fragment is half-open, 0-based [Start, End).

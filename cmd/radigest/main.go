@@ -11,11 +11,11 @@ import (
 	"strings"
 	"sync"
 
-	"radigest/internal/collector"
-	"radigest/internal/digest"
-	"radigest/internal/enzyme"
-	"radigest/internal/fasta"
-	"radigest/internal/sim"
+	"github.com/KPU-AGC/radigest/internal/collector"
+	"github.com/KPU-AGC/radigest/internal/digest"
+	"github.com/KPU-AGC/radigest/internal/enzyme"
+	"github.com/KPU-AGC/radigest/internal/fasta"
+	"github.com/KPU-AGC/radigest/internal/sim"
 )
 
 var (
@@ -25,7 +25,7 @@ var (
 func main() {
 	// ---- CLI flags ----------------------------------------------------------
 	fastaPath := flag.String("fasta", "", "reference FASTA file")
-	enzFlag := flag.String("enzymes", "", "comma-separated enzyme names (≥1; first two form the AB pair if present)")
+	enzFlag := flag.String("enzymes", "", "comma-separated enzyme names (one or two; two form the AB pair)")
 	minLen := flag.Int("min", 1, "minimum fragment length (bp)")
 	maxLen := flag.Int("max", 1<<30, "maximum fragment length (bp)")
 	gffPath := flag.String("gff", "fragments.gff3", "output GFF3 file (path or '-' for stdout)")
@@ -53,7 +53,7 @@ func main() {
 		fmt.Fprintln(b, "radigest — in-silico single/double digest and GFF3 fragment export")
 		fmt.Fprintln(b)
 		fmt.Fprintln(b, "Usage:")
-		fmt.Fprintln(b, "  radigest -fasta <ref.fa|-> -enzymes <E1[,E2[,E3...]]> [options]")
+		fmt.Fprintln(b, "  radigest -fasta <ref.fa|-> -enzymes <E1[,E2]> [options]")
 		fmt.Fprintln(b, "  radigest -sim-len <bp> -sim-gc <0..1> -enzymes <E1[,E2]> [options]")
 		fmt.Fprintln(b)
 		fmt.Fprintln(b, "Required flags:")
@@ -105,22 +105,22 @@ func main() {
 		flag.Usage()
 		os.Exit(2)
 	}
+	if err := validatePositiveThreads(*threads); err != nil {
+		log.Fatal(err)
+	}
 	if *minLen > *maxLen {
 		log.Fatalf("invalid range: -min (%d) > -max (%d)", *minLen, *maxLen)
 	}
+	if *simLen > 0 {
+		if err := validateSimGC(*simGC); err != nil {
+			log.Fatal(err)
+		}
+	}
 
 	// ---- compile enzymes ----------------------------------------------------
-	var ens []enzyme.Enzyme
-	for _, name := range strings.Split(*enzFlag, ",") {
-		n := strings.TrimSpace(name)
-		e, ok := enzyme.DB[n]
-		if !ok {
-			log.Fatalf("unknown enzyme %q", name)
-		}
-		ens = append(ens, e)
-	}
-	if len(ens) >= 2 && ens[0].Name == ens[1].Name {
-		log.Fatalf("first two enzymes must differ (got %s,%s)", ens[0].Name, ens[1].Name)
+	ens, enzymeNames, err := parseEnzymes(*enzFlag)
+	if err != nil {
+		log.Fatal(err)
 	}
 	plan := digest.NewPlanWithOptions(ens, digest.Options{
 		AllowSame:  *allowSame,
@@ -190,7 +190,7 @@ func main() {
 			MaxLength int      `json:"max_length"`
 			collector.Stats
 		}{
-			Enzymes:   strings.Split(*enzFlag, ","),
+			Enzymes:   enzymeNames,
 			MinLength: *minLen,
 			MaxLength: *maxLen,
 			Stats:     stats,

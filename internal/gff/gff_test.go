@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"radigest/internal/digest"
+	"github.com/KPU-AGC/radigest/internal/digest"
 )
 
 func TestWrite(t *testing.T) {

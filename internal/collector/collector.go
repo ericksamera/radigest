@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"radigest/internal/digest"
+	"github.com/KPU-AGC/radigest/internal/digest"
 )
 
 // Msg delivers a batch of fragments for one chromosome.

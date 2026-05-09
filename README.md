@@ -1,9 +1,8 @@
 # radigest
 
-[![CI](https://img.shields.io/github/actions/workflow/status/ericksamera/radigest/ci.yml?branch=main&label=ci)](https://github.com/KPU-AGC/radigest/actions/workflows/ci.yml)
+[![CI](https://img.shields.io/github/actions/workflow/status/KPU-AGC/radigest/ci.yml?branch=main&label=ci)](https://github.com/KPU-AGC/radigest/actions/workflows/ci.yml)
 [![Go](https://img.shields.io/badge/go-%3E=%201.22-blue)](https://golang.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
-
 
 Fast in-silico restriction digest for genomics. Give it a reference FASTA (plain or `.gz`) or synthesize one on the fly; pass one or two enzymes; it scans, size-selects, and exports fragments as GFF3 for GBS/ddRAD, probe design, or visualization. Output order is deterministic even with multithreading.
 
@@ -11,17 +10,20 @@ Fast in-silico restriction digest for genomics. Give it a reference FASTA (plain
 
 ## Features
 
-* **Single or double digest.** Double-digest keeps **adjacent AB/BA** by default; enable **AA/BB** too with `-allow-same`. Single-digest uses consecutive A cuts.
-* **IUPAC & cut offsets.** Sites accept degenerate codes; the cut index comes from `^` in the site (or mid-site if missing). `-strict-cuts` makes missing carets an error.
-* **Robust FASTA I/O.** Read from a path or `-` (STDIN), auto-detect `.gz`, normalize case, and **trim CRLF**. `N` in the **reference** does **not** match any site.
-* **Synthetic genomes.** Generate a single-chromosome genome named `chr1` with `-sim-len`, `-sim-gc`, `-sim-seed` and digest it directly—no FASTA on disk needed.
-* **Clean outputs.** GFF3 with `ID=<chr>_<n>;Length=<bp>`; optional JSON summary of counts/bases per chromosome. Coordinates are **1-based closed** in GFF (internally 0-based half-open).
+- **Single or double digest.** Double-digest keeps **adjacent AB/BA** by default; enable **AA/BB** too with `-allow-same`. Single-digest uses consecutive A cuts.
+- **IUPAC & cut offsets.** Sites accept degenerate codes; the cut index comes from `^` in the site (or mid-site if missing). `-strict-cuts` makes missing carets an error.
+- **Robust FASTA I/O.** Read from a path or `-` (STDIN), auto-detect `.gz`, normalize case, and **trim CRLF**. `N` in the **reference** does **not** match any site.
+- **Synthetic genomes.** Generate a single-chromosome genome named `chr1` with `-sim-len`, `-sim-gc`, `-sim-seed` and digest it directly—no FASTA on disk needed.
+- **Clean outputs.** GFF3 with `ID=<chr>_<n>;Length=<bp>`; optional JSON summary of counts/bases per chromosome. Coordinates are **1-based closed** in GFF (internally 0-based half-open).
 
 ---
 
 ## Quick start
 
 ```bash
+# Install from GitHub
+go install github.com/KPU-AGC/radigest/cmd/radigest@latest
+
 # Single digest (EcoRI) → GFF file
 radigest -fasta ref.fa -enzymes EcoRI -gff fragments.gff3
 
@@ -39,14 +41,20 @@ radigest -sim-len 10000000 -sim-gc 0.42 -sim-seed 123 -enzymes EcoRI,MseI -gff o
 
 ## CLI (most used)
 
-* `-fasta <path|->` — reference FASTA; `-` = STDIN; `.gz` auto-detected.
-* `-enzymes E1[,E2]` — one (A) or two (A,B). In double-digest, AB/BA by default.
-* `-min/-max` — keep fragments in `[min,max]` bp (**default min=1**).
-* `-gff <path|->` — GFF3 out; `-` = STDOUT.
-* `-json <path>` — write a run summary (counts, bases, per-chrom stats).
-* `-threads <n>`, `-v`, `-version`, `-list-enzymes`.
-* **Simulation:** `-sim-len <bp>`, `-sim-gc <0..1>`, `-sim-seed <int>` (emits a single `chr1`).
-* **Modes:** `-allow-same` (keep AA/BB in double-digest), `-strict-cuts` (error if a site lacks `^` and would otherwise fall back to mid-site).
+- `-fasta <path|->` — reference FASTA; `-` = STDIN; `.gz` auto-detected.
+- `-enzymes E1[,E2]` — one (A) or two (A,B) only. In double-digest, AB/BA by default.
+- `-min/-max` — keep fragments in `[min,max]` bp (**default min=1**).
+- `-gff <path|->` — GFF3 out; `-` = STDOUT.
+- `-json <path>` — write a run summary (counts, bases, per-chrom stats).
+- `-threads <n>` — positive worker count; `-v`, `-version`, `-list-enzymes`.
+- **Simulation:** `-sim-len <bp>`, `-sim-gc <0..1>` (invalid values error), `-sim-seed <int>` (emits a single `chr1`).
+- **Modes:** `-allow-same` (keep AA/BB in double-digest), `-strict-cuts` (error if a site lacks `^` and would otherwise fall back to mid-site).
+
+---
+
+## Scope and limitations
+
+radigest is a deterministic sequence-level model. It identifies recognition sites and cut coordinates from the reference sequence only. It does **not** model methylation sensitivity, partial digestion, star activity, enzyme efficiency, buffer compatibility, or empirical digestion rates. Enzymes with the same recognition motif and cut coordinate are treated identically by the digest logic even when their wet-lab behavior can differ under methylation or assay conditions.
 
 ---
 
@@ -65,11 +73,11 @@ chr1	radigest	fragment	<start>	<end>	.	+	.	ID=chr1_1;Length=123
 
 ```json
 {
-  "enzymes": ["EcoRI","MseI"],
+  "enzymes": ["EcoRI", "MseI"],
   "min_length": 100,
   "max_length": 800,
   "total_fragments": 123456,
   "total_bases": 7891011,
-  "per_chromosome": {"chr1": {"fragments": 23456, "bases": 3456789}}
+  "per_chromosome": { "chr1": { "fragments": 23456, "bases": 3456789 } }
 }
 ```
