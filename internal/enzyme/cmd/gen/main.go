@@ -4,15 +4,17 @@
 //
 //	go generate ./internal/enzyme/...
 //
-// You can also run it by hand from the repository root:
+// You can also run it by hand from internal/enzyme:
 //
-//	go run ./internal/enzyme/cmd/gen
+//	go run ./cmd/gen -in enzymes.json -out enzymes_generated.go
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"go/format"
 	"os"
 	"strings"
 	"text/template"
@@ -35,8 +37,8 @@ var DB = map[string]Enzyme{
 `))
 
 func main() {
-	in := flag.String("in", "internal/enzyme/enzymes.json", "input JSON")
-	out := flag.String("out", "internal/enzyme/enzymes_generated.go", "output .go file")
+	in := flag.String("in", "enzymes.json", "input JSON")
+	out := flag.String("out", "enzymes_generated.go", "output .go file")
 	flag.Parse()
 
 	raw, err := os.ReadFile(*in)
@@ -57,11 +59,11 @@ func main() {
 		}
 	}
 
-	f, err := os.Create(*out)
+	var buf bytes.Buffer
+	check(tpl.Execute(&buf, rs))
+	formatted, err := format.Source(buf.Bytes())
 	check(err)
-	defer f.Close()
-
-	check(tpl.Execute(f, rs))
+	check(os.WriteFile(*out, formatted, 0o644))
 	fmt.Printf("generated %s with %d enzymes\n", *out, len(rs))
 }
 

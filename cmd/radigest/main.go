@@ -21,7 +21,7 @@ import (
 )
 
 var (
-	version = "v0.5.1"
+	version = "v0.5.2"
 )
 
 type digestResult struct {
@@ -135,6 +135,10 @@ func main() {
 		if err := validateSimGC(*simGC); err != nil {
 			log.Fatal(err)
 		}
+	}
+
+	if err := validateOutputPaths(*fastaPath, *gffPath, *fragmentsTSVPath, *jsonPath, *fastaPath != ""); err != nil {
+		log.Fatal(err)
 	}
 
 	scoreMin := *scoreMinFlag

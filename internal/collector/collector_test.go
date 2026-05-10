@@ -8,11 +8,19 @@ import (
 )
 
 func TestCollector(t *testing.T) {
-	tmp, _ := os.CreateTemp("", "frag*.gff")
-	defer os.Remove(tmp.Name())
+	tmp, err := os.CreateTemp("", "frag*.gff")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Remove(tmp.Name()) }()
+	if err := tmp.Close(); err != nil {
+		t.Fatal(err)
+	}
 
 	in, done, err := New(tmp.Name())
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// send two chromosomes in deterministic order (Idx 0,1)
 	in <- Msg{Idx: 0, Chr: "chr1", Frags: []digest.Fragment{{Start: 0, End: 5}}}

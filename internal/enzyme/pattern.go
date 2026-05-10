@@ -27,7 +27,9 @@ func CompileMask(site string) []uint8 {
 // baseMaskWin maps a reference base to its mask for matching.
 // NOTE: We *block* 'N' in the reference (mask=0) so 'N' never matches any site.
 func baseMaskWin(b byte) uint8 {
-	if b >= 'a' && b <= 'z' { b -= 'a' - 'A' }
+	if b >= 'a' && b <= 'z' {
+		b -= 'a' - 'A'
+	}
 	if b == 'N' {
 		return 0
 	}

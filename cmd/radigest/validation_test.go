@@ -57,3 +57,27 @@ func TestParseEnzymesRejectsInvalidInputs(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateOutputPathsRejectsCollisions(t *testing.T) {
+	if err := validateOutputPaths("ref.fa", "ref.fa", "fragments.tsv", "run.json", true); err == nil {
+		t.Fatalf("expected -gff/-fasta path collision to be rejected")
+	}
+	if err := validateOutputPaths("ref.fa", "out.gff3", "out.gff3", "run.json", true); err == nil {
+		t.Fatalf("expected -gff/-fragments-tsv path collision to be rejected")
+	}
+	if err := validateOutputPaths("ref.fa", "out.gff3", "fragments.tsv", "out.gff3", true); err == nil {
+		t.Fatalf("expected -gff/-json path collision to be rejected")
+	}
+	if err := validateOutputPaths("ref.fa", "-", "-", "run.json", true); err == nil {
+		t.Fatalf("expected two stdout outputs to be rejected")
+	}
+}
+
+func TestValidateOutputPathsAllowsDisabledOutputsAndStdout(t *testing.T) {
+	if err := validateOutputPaths("-", "-", "", "", true); err != nil {
+		t.Fatalf("stdout/disabled outputs should be allowed: %v", err)
+	}
+	if err := validateOutputPaths("", "/dev/null", "", "", false); err != nil {
+		t.Fatalf("/dev/null should be allowed as a sink: %v", err)
+	}
+}
