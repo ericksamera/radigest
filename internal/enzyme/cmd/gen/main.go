@@ -1,11 +1,12 @@
 // Code-gen utility for radigest: convert enzymes.json → enzymes_generated.go
 //
 // Run automatically via
-//   go generate ./internal/enzyme/...
 //
-// You can also run it by hand:
-//   go run ./internal/enzyme/cmd/gen -in internal/enzyme/enzymes.json
+//	go generate ./internal/enzyme/...
 //
+// You can also run it by hand from the repository root:
+//
+//	go run ./internal/enzyme/cmd/gen
 package main
 
 import (
@@ -34,7 +35,7 @@ var DB = map[string]Enzyme{
 `))
 
 func main() {
-	in  := flag.String("in",  "internal/enzyme/enzymes.json", "input JSON")
+	in := flag.String("in", "internal/enzyme/enzymes.json", "input JSON")
 	out := flag.String("out", "internal/enzyme/enzymes_generated.go", "output .go file")
 	flag.Parse()
 

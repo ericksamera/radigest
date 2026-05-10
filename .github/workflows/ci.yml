@@ -28,6 +28,8 @@ jobs:
         run: |
           set -euo pipefail
           go env
+          go generate ./...
+          git diff --exit-code
           go test -count=1 -vet=off ./...
 
   lint:
