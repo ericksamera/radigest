@@ -7,10 +7,14 @@ import (
 )
 
 func gcFrac(b []byte) float64 {
-	if len(b) == 0 { return 0 }
+	if len(b) == 0 {
+		return 0
+	}
 	gc := 0
 	for _, x := range b {
-		if x == 'G' || x == 'C' { gc++ }
+		if x == 'G' || x == 'C' {
+			gc++
+		}
 	}
 	return float64(gc) / float64(len(b))
 }

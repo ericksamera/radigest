@@ -17,7 +17,7 @@ func TestSingleDigest_NoOrOneCutKeepsNone(t *testing.T) {
 }
 
 func TestSingleDigest_InclusiveMinMax(t *testing.T) {
-	eA := enzyme.DB["MluCI"] // ^AATT
+	eA := enzyme.DB["MluCI"]      // ^AATT
 	seq := []byte("AATTCCCCAATT") // cuts at 0 and 8 → len 8
 	if got := Digest(seq, []enzyme.Enzyme{eA}, 8, 8); len(got) != 1 {
 		t.Fatalf("min=max=8 should keep exactly 1 frag, got %d", len(got))

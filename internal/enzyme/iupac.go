@@ -45,7 +45,9 @@ func Match(pattern []uint8, window []byte) bool {
 	}
 	for i, m := range pattern {
 		base := window[i]
-		if base >= 'a' && base <= 'z' { base -= 'a' - 'A' }
+		if base >= 'a' && base <= 'z' {
+			base -= 'a' - 'A'
+		}
 		if (m & codeMap[base]) == 0 {
 			return false
 		}

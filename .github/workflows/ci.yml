@@ -20,6 +20,12 @@ jobs:
           check-latest: true
           cache: false
 
+      - name: Go generate is clean
+        run: |
+          set -euo pipefail
+          go generate ./...
+          git diff --exit-code
+
       - name: Go test
         env:
           GOMEMLIMIT: 1GiB
@@ -28,8 +34,6 @@ jobs:
         run: |
           set -euo pipefail
           go env
-          go generate ./...
-          git diff --exit-code
           go test -count=1 -vet=off ./...
 
   lint:

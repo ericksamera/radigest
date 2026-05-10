@@ -15,9 +15,15 @@ func TestStripCaret(t *testing.T) {
 
 func TestMatchMask_DegenerateR(t *testing.T) {
 	mask := CompileMask("ACGTR") // R = A|G
-	if !MatchMask(mask, []byte("ACGTA")) { t.Fatal("R should match A") }
-	if !MatchMask(mask, []byte("ACGTG")) { t.Fatal("R should match G") }
-	if  MatchMask(mask, []byte("ACGTC")) { t.Fatal("R should not match C") }
+	if !MatchMask(mask, []byte("ACGTA")) {
+		t.Fatal("R should match A")
+	}
+	if !MatchMask(mask, []byte("ACGTG")) {
+		t.Fatal("R should match G")
+	}
+	if MatchMask(mask, []byte("ACGTC")) {
+		t.Fatal("R should not match C")
+	}
 }
 
 func TestMatchMask_SequenceNDoesNotMatch(t *testing.T) {

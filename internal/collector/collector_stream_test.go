@@ -14,7 +14,7 @@ func TestWriterWriteStream(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.Remove(tmp.Name())
+	defer func() { _ = os.Remove(tmp.Name()) }()
 	_ = tmp.Close()
 
 	w, err := NewWriter(tmp.Name())
@@ -42,7 +42,7 @@ func TestWriterWriteStream(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	sc := bufio.NewScanner(f)
 	lines := []string{}
 	for sc.Scan() {

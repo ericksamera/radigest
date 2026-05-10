@@ -11,10 +11,12 @@ import (
 
 func TestCollector_OutOfOrderIdxWritesInOrder(t *testing.T) {
 	tmp, _ := os.CreateTemp("", "frag*.gff")
-	defer os.Remove(tmp.Name())
+	defer func() { _ = os.Remove(tmp.Name()) }()
 
 	in, done, err := New(tmp.Name())
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// Send idx=1 first, then idx=0; collector must serialize 0 then 1.
 	in <- Msg{Idx: 1, Chr: "chr2", Frags: []digest.Fragment{{Start: 10, End: 12}}}
@@ -23,11 +25,13 @@ func TestCollector_OutOfOrderIdxWritesInOrder(t *testing.T) {
 	<-done
 
 	f, _ := os.Open(tmp.Name())
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	sc := bufio.NewScanner(f)
 
 	lines := []string{}
-	for sc.Scan() { lines = append(lines, sc.Text()) }
+	for sc.Scan() {
+		lines = append(lines, sc.Text())
+	}
 	if len(lines) < 3 {
 		t.Fatalf("expected header + 2 lines, got %d", len(lines))
 	}
@@ -38,7 +42,7 @@ func TestCollector_OutOfOrderIdxWritesInOrder(t *testing.T) {
 
 func TestCollector_EmptyThenNonEmpty(t *testing.T) {
 	tmp, _ := os.CreateTemp("", "frag*.gff")
-	defer os.Remove(tmp.Name())
+	defer func() { _ = os.Remove(tmp.Name()) }()
 
 	in, done, _ := New(tmp.Name())
 	in <- Msg{Idx: 0, Chr: "empty", Frags: nil}

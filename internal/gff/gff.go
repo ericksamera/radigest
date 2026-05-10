@@ -16,8 +16,12 @@ func WriteFile(path, chr string, frags []digest.Fragment) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	return Write(f, chr, frags)
+	err = Write(f, chr, frags)
+	closeErr := f.Close()
+	if err != nil {
+		return err
+	}
+	return closeErr
 }
 
 // Write streams a minimal, valid GFF3 (version header + one line / fragment).
@@ -29,7 +33,7 @@ func Write(w io.Writer, chr string, frags []digest.Fragment) error {
 	}
 	for i, f := range frags {
 		start := f.Start + 1 // 1-based
-		end   := f.End       // half-open → closed
+		end := f.End         // half-open → closed
 		if _, err := fmt.Fprintf(
 			bw,
 			"%s\tradigest\tfragment\t%d\t%d\t.\t+\t.\tID=frag%d\n",

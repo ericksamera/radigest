@@ -10,38 +10,51 @@ import (
 func TestStream(t *testing.T) {
 	data := ">chr1\nacgT\nNN\n>chr2 some desc\nGgCc\n"
 
-	tmp, err := os.CreateTemp("", "fasta*.fa")
-	if err != nil { t.Fatal(err) }
-	defer os.Remove(tmp.Name())
-	if _, err = tmp.WriteString(data); err != nil { t.Fatal(err) }
-	tmp.Close()
-
+	path := writeTempFASTA(t, data)
 	ch := make(chan Record)
 	go func() {
-		if err := Stream(tmp.Name(), ch); err != nil {
+		if err := Stream(path, ch); err != nil {
 			t.Error(err)
 		}
 	}()
 
 	var recs []Record
-	for r := range ch { recs = append(recs, r) }
-	if len(recs) != 2 { t.Fatalf("want 2 records, got %d", len(recs)) }
-	if recs[0].ID != "chr1" || string(recs[0].Seq) != "ACGTNN" { t.Fatalf("bad chr1: %+v", recs[0]) }
-	if recs[1].ID != "chr2" || string(recs[1].Seq) != "GGCC"   { t.Fatalf("bad chr2: %+v", recs[1]) }
+	for r := range ch {
+		recs = append(recs, r)
+	}
+	if len(recs) != 2 {
+		t.Fatalf("want 2 records, got %d", len(recs))
+	}
+	if recs[0].ID != "chr1" || string(recs[0].Seq) != "ACGTNN" {
+		t.Fatalf("bad chr1: %+v", recs[0])
+	}
+	if recs[1].ID != "chr2" || string(recs[1].Seq) != "GGCC" {
+		t.Fatalf("bad chr2: %+v", recs[1])
+	}
 }
 
 func TestStreamGzip(t *testing.T) {
 	data := ">chr1\nacgT\nNN\n>chr2 some desc\nGgCc\n"
 	tmp, err := os.CreateTemp("", "fasta*.fa.gz")
-	if err != nil { t.Fatal(err) }
-	defer os.Remove(tmp.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Remove(tmp.Name()) }()
 
 	var buf bytes.Buffer
 	zw := gzip.NewWriter(&buf)
-	if _, err := zw.Write([]byte(data)); err != nil { t.Fatal(err) }
-	if err := zw.Close(); err != nil { t.Fatal(err) }
-	if _, err := tmp.Write(buf.Bytes()); err != nil { t.Fatal(err) }
-	tmp.Close()
+	if _, err := zw.Write([]byte(data)); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tmp.Write(buf.Bytes()); err != nil {
+		t.Fatal(err)
+	}
+	if err := tmp.Close(); err != nil {
+		t.Fatal(err)
+	}
 
 	ch := make(chan Record)
 	go func() {
@@ -50,8 +63,79 @@ func TestStreamGzip(t *testing.T) {
 		}
 	}()
 	var recs []Record
-	for r := range ch { recs = append(recs, r) }
-	if len(recs) != 2 { t.Fatalf("want 2 records, got %d", len(recs)) }
-	if recs[0].ID != "chr1" || string(recs[0].Seq) != "ACGTNN" { t.Fatalf("bad chr1: %+v", recs[0]) }
-	if recs[1].ID != "chr2" || string(recs[1].Seq) != "GGCC"   { t.Fatalf("bad chr2: %+v", recs[1]) }
+	for r := range ch {
+		recs = append(recs, r)
+	}
+	if len(recs) != 2 {
+		t.Fatalf("want 2 records, got %d", len(recs))
+	}
+	if recs[0].ID != "chr1" || string(recs[0].Seq) != "ACGTNN" {
+		t.Fatalf("bad chr1: %+v", recs[0])
+	}
+	if recs[1].ID != "chr2" || string(recs[1].Seq) != "GGCC" {
+		t.Fatalf("bad chr2: %+v", recs[1])
+	}
+}
+
+func TestStreamRejectsEmptyHeader(t *testing.T) {
+	path := writeTempFASTA(t, ">\nACGT\n")
+	ch := make(chan Record)
+	err := Stream(path, ch)
+	if err == nil {
+		t.Fatalf("expected empty-header error")
+	}
+	if _, ok := <-ch; ok {
+		t.Fatalf("channel should be closed on error")
+	}
+}
+
+func TestStreamRejectsSequenceBeforeHeader(t *testing.T) {
+	path := writeTempFASTA(t, "ACGT\n>chr1\nTT\n")
+	ch := make(chan Record)
+	err := Stream(path, ch)
+	if err == nil {
+		t.Fatalf("expected sequence-before-header error")
+	}
+	if _, ok := <-ch; ok {
+		t.Fatalf("channel should be closed on error")
+	}
+}
+
+func TestStreamRejectsEmptyFile(t *testing.T) {
+	path := writeTempFASTA(t, "")
+	ch := make(chan Record)
+	err := Stream(path, ch)
+	if err == nil {
+		t.Fatalf("expected no-records error")
+	}
+	if _, ok := <-ch; ok {
+		t.Fatalf("channel should be closed on error")
+	}
+}
+
+func TestStreamOpenErrorClosesChannel(t *testing.T) {
+	ch := make(chan Record)
+	err := Stream("/definitely/not/a/radigest/input.fa", ch)
+	if err == nil {
+		t.Fatalf("expected open error")
+	}
+	if _, ok := <-ch; ok {
+		t.Fatalf("channel should be closed on error")
+	}
+}
+
+func writeTempFASTA(t *testing.T, data string) string {
+	t.Helper()
+	tmp, err := os.CreateTemp("", "fasta*.fa")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tmp.WriteString(data); err != nil {
+		t.Fatal(err)
+	}
+	if err := tmp.Close(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Remove(tmp.Name()) })
+	return tmp.Name()
 }

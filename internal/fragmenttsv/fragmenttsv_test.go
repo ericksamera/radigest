@@ -15,7 +15,7 @@ func TestWriter(t *testing.T) {
 	}
 	path := tmp.Name()
 	_ = tmp.Close()
-	defer os.Remove(path)
+	defer func() { _ = os.Remove(path) }()
 
 	w, err := New(path)
 	if err != nil {
