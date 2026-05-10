@@ -1,11 +1,12 @@
 // internal/enzyme/enzyme.go
-//go:generate go run ./internal/enzyme/cmd/gen -in internal/enzyme/enzymes.json -out internal/enzyme/enzymes_generated.go
+//
+//go:generate go run ./cmd/gen -in enzymes.json -out enzymes_generated.go
 package enzyme
 
 type Enzyme struct {
-    Name        string
-    Recognition string
-    CutIndex    int // 0‑based offset from start of site
+	Name        string
+	Recognition string
+	CutIndex    int // 0‑based offset from start of site
 }
 
 // dummy DB – will be generated later
@@ -15,6 +16,6 @@ type Enzyme struct {
 // }
 
 func Get(name string) (Enzyme, bool) {
-    e, ok := DB[name]
-    return e, ok
+	e, ok := DB[name]
+	return e, ok
 }
