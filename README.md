@@ -14,7 +14,8 @@ Fast in-silico restriction digest for genomics. Give it a reference FASTA (plain
 - **IUPAC & cut offsets.** Sites accept degenerate codes; the cut index comes from `^` in the site (or mid-site if missing). `-strict-cuts` makes missing carets an error.
 - **Robust FASTA I/O.** Read from a path or `-` (STDIN), auto-detect `.gz`, normalize case, and **trim CRLF**. `N` in the **reference** does **not** match any site.
 - **Synthetic genomes.** Generate a single-chromosome genome named `chr1` with `-sim-len`, `-sim-gc`, `-sim-seed` and digest it directly—no FASTA on disk needed.
-- **Clean outputs.** GFF3 with `ID=<chr>_<n>;Length=<bp>`; optional JSON summary of counts/bases per chromosome. Coordinates are **1-based closed** in GFF (internally 0-based half-open).
+- **Clean outputs.** GFF3 with `ID=<chr>_<n>;Length=<bp>`; per-fragment TSV with insert length, hard-keep status, and size-selection weight; optional JSON summary of counts/bases per chromosome. Coordinates are **1-based closed** in GFF (internally 0-based half-open).
+- **Size-selection scoring.** Keep the hard `-min/-max` window for GFF while assigning per-fragment recovery weights with `hard`, `normal`, `triangular`, or `soft-window` models over an optional broader score range.
 - **Streaming fragment export.** The CLI streams digest fragments to the collector instead of materializing every kept fragment for a chromosome before writing.
 
 ---
@@ -31,6 +32,10 @@ radigest -fasta ref.fa -enzymes EcoRI -gff fragments.gff3
 # Double digest with size selection + JSON summary
 radigest -fasta ref.fa -enzymes EcoRI,MseI -min 100 -max 800 -gff fragments.gff3 -json run.json
 
+# ddRAD-style soft-window scoring with broad per-fragment TSV for downstream modeling
+radigest -fasta ref.fa -enzymes PstI,MspI -min 250 -max 500 -score-min 1 -score-max 1000 \
+  -size-model soft-window -size-edge-sd 25 -fragments-tsv fragments.tsv -json run.json
+
 # Double digest but ALSO keep AA/BB neighbors
 radigest -fasta ref.fa -enzymes EcoRI,MseI -allow-same -gff fragments.gff3
 
@@ -44,9 +49,13 @@ radigest -sim-len 10000000 -sim-gc 0.42 -sim-seed 123 -enzymes EcoRI,MseI -gff o
 
 - `-fasta <path|->` — reference FASTA; `-` = STDIN; `.gz` auto-detected.
 - `-enzymes E1[,E2]` — one (A) or two (A,B) only. In double-digest, AB/BA by default.
-- `-min/-max` — keep fragments in `[min,max]` bp (**default min=1**).
-- `-gff <path|->` — GFF3 out; `-` = STDOUT.
-- `-json <path>` — write a run summary (counts, bases, per-chrom stats).
+- `-min/-max` — hard-selected insert-length window used for GFF output and `hard_kept` in TSV (**default min=1**).
+- `-score-min/-score-max` — broader insert-length range emitted to `-fragments-tsv` and used for weighted size-selection stats; defaults to `-min/-max`.
+- `-size-model hard|normal|triangular|soft-window` — per-fragment size-selection weight model (**default `hard`**).
+- `-size-mean`, `-size-sd`, `-size-edge-sd` — parameters for `normal`, `triangular`, and `soft-window` scoring.
+- `-gff <path|->` — GFF3 out for hard-kept fragments; `-` = STDOUT.
+- `-fragments-tsv <path|->` — per-fragment TSV for score-range fragments (**default `fragments.tsv`; empty string disables**).
+- `-json <path>` — write a run summary (counts, bases, per-chrom stats, and size-selection weighted stats).
 - `-threads <n>` — positive worker count; `-v`, `-version`, `-list-enzymes`.
 - **Simulation:** `-sim-len <bp>`, `-sim-gc <0..1>` (invalid values error), `-sim-seed <int>` (emits a single `chr1`).
 - **Modes:** `-allow-same` (keep AA/BB in double-digest), `-strict-cuts` (error if a site lacks `^` and would otherwise fall back to mid-site).
@@ -70,6 +79,18 @@ chr1	radigest	fragment	<start>	<end>	.	+	.	ID=chr1_1;Length=123
 
 `start/end` are **1-based closed**; `Length` is `end - start + 1`. Ordering is deterministic per chromosome.
 
+### Fragment TSV
+
+By default, radigest also writes a per-fragment TSV for fragments in the score range:
+
+```
+chrom	start0	end0	length	hard_kept	size_weight
+chr1	10422	10731	309	true	0.982143
+chr1	18831	18922	91	false	0.014221
+```
+
+`hard_kept` is true when the insert length is inside `-min/-max`. `size_weight` is the selected size model evaluated on insert length only. Use `-fragments-tsv ""` to disable this output.
+
 ### JSON (optional)
 
 ```json
@@ -77,6 +98,20 @@ chr1	radigest	fragment	<start>	<end>	.	+	.	ID=chr1_1;Length=123
   "enzymes": ["EcoRI", "MseI"],
   "min_length": 100,
   "max_length": 800,
+  "fragments_tsv": "fragments.tsv",
+  "size_selection": {
+    "model": "soft-window",
+    "score_min": 1,
+    "score_max": 1000,
+    "edge_sd": 25,
+    "raw_fragments_scored": 234567,
+    "raw_bases_scored": 91234567,
+    "raw_fragments_in_window": 123456,
+    "raw_bases_in_window": 42100000,
+    "weighted_fragments": 98234.7,
+    "weighted_bases": 33100000.5,
+    "mean_weighted_length": 336.9
+  },
   "total_fragments": 123456,
   "total_bases": 7891011,
   "per_chromosome": { "chr1": { "fragments": 23456, "bases": 3456789 } }

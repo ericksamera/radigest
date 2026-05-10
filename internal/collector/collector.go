@@ -65,7 +65,7 @@ func NewWriter(gffPath string) (*Writer, error) {
 	return w, nil
 }
 
-func (w *Writer) writeFragment(chr string, ordinal int, fr digest.Fragment) error {
+func (w *Writer) WriteFragment(chr string, ordinal int, fr digest.Fragment) error {
 	start := fr.Start + 1 // 1-based closed for GFF
 	end := fr.End
 	ln := end - fr.Start
@@ -87,7 +87,7 @@ func (w *Writer) writeFragment(chr string, ordinal int, fr digest.Fragment) erro
 // retained for compatibility with the batch collector API.
 func (w *Writer) WriteFragments(chr string, frags []digest.Fragment) error {
 	for i, fr := range frags {
-		if err := w.writeFragment(chr, i+1, fr); err != nil {
+		if err := w.WriteFragment(chr, i+1, fr); err != nil {
 			return err
 		}
 	}
@@ -103,7 +103,7 @@ func (w *Writer) WriteStream(chr string, frags <-chan digest.Fragment) (ChrStats
 	ordinal := 1
 	for fr := range frags {
 		if firstErr == nil {
-			if err := w.writeFragment(chr, ordinal, fr); err != nil {
+			if err := w.WriteFragment(chr, ordinal, fr); err != nil {
 				firstErr = err
 			} else {
 				local.Fragments++

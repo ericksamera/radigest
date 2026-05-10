@@ -27,6 +27,7 @@ go.work.sum
 *.fa*
 *.fna*
 *.gff3*
+*.tsv*
 
 *.go.txt
 *codebase*
