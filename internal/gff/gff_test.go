@@ -20,3 +20,15 @@ func TestWrite(t *testing.T) {
 		t.Fatalf("mismatch\nwant:\n%s\ngot:\n%s", want, got)
 	}
 }
+
+func TestWriteEscapesSeqID(t *testing.T) {
+	buf := &bytes.Buffer{}
+	frags := []digest.Fragment{{Start: 0, End: 5}}
+	if err := Write(buf, "chr 1;bad=2,50%", frags); err != nil {
+		t.Fatal(err)
+	}
+	got := buf.String()
+	if !strings.Contains(got, "chr%201%3Bbad%3D2%2C50%25\tradigest") {
+		t.Fatalf("seqid was not escaped: %q", got)
+	}
+}

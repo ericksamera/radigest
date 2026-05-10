@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/KPU-AGC/radigest/internal/digest"
+	"github.com/KPU-AGC/radigest/internal/gff"
 )
 
 // Msg delivers a batch of fragments for one chromosome.
@@ -65,13 +66,15 @@ func NewWriter(gffPath string) (*Writer, error) {
 	return w, nil
 }
 
+// WriteFragment writes one GFF3 fragment using the caller-provided per-chromosome
+// ordinal for the generated feature ID.
 func (w *Writer) WriteFragment(chr string, ordinal int, fr digest.Fragment) error {
 	start := fr.Start + 1 // 1-based closed for GFF
 	end := fr.End
 	ln := end - fr.Start
 	if _, err := fmt.Fprintf(w.bw,
-		"%s\tradigest\tfragment\t%d\t%d\t.\t+\t.\tID=%s_%d;Length=%d\n",
-		chr, start, end, chr, ordinal, ln); err != nil {
+		"%s\tradigest\tfragment\t%d\t%d\t.\t+\t.\t%s\n",
+		gff.EscapeSeqID(chr), start, end, gff.FragmentAttributes(chr, ordinal, ln)); err != nil {
 		return err
 	}
 	w.stats.TotalFragments++

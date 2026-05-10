@@ -8,16 +8,23 @@ import (
 	"github.com/KPU-AGC/radigest/internal/digest"
 )
 
+// Writer emits per-fragment TSV rows for downstream modeling. A Writer created
+// with an empty path is a no-op, which lets callers keep TSV output disabled
+// without nil checks.
 type Writer struct {
 	f         *os.File
 	bw        *bufio.Writer
 	closeFile bool
+	disabled  bool
 }
 
+// New opens path and writes the TSV header. Use an empty path to disable TSV
+// output. Use "-" to write to stdout.
 func New(path string) (*Writer, error) {
 	if path == "" {
-		return nil, nil
+		return &Writer{disabled: true}, nil
 	}
+
 	var f *os.File
 	closeFile := false
 	if path == "-" {
@@ -40,17 +47,20 @@ func New(path string) (*Writer, error) {
 	return w, nil
 }
 
-func (w *Writer) Write(chr string, fr digest.Fragment, hardKept bool, weight float64) error {
-	if w == nil {
+// Write emits one scored fragment row. Coordinates are 0-based half-open.
+func (w *Writer) Write(chr string, fr digest.Fragment, hardKept bool, sizeWeight float64) error {
+	if w == nil || w.disabled {
 		return nil
 	}
 	length := fr.End - fr.Start
-	_, err := fmt.Fprintf(w.bw, "%s\t%d\t%d\t%d\t%t\t%.8g\n", chr, fr.Start, fr.End, length, hardKept, weight)
+	_, err := fmt.Fprintf(w.bw, "%s\t%d\t%d\t%d\t%t\t%.8g\n", chr, fr.Start, fr.End, length, hardKept, sizeWeight)
 	return err
 }
 
+// Close flushes pending TSV output and closes owned files. Stdout is flushed but
+// not closed. Disabled writers are no-ops.
 func (w *Writer) Close() error {
-	if w == nil {
+	if w == nil || w.disabled {
 		return nil
 	}
 	err := w.bw.Flush()

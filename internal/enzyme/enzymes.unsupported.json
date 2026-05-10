@@ -1,0 +1,17 @@
+[
+  {"name": "AciI", "site": "C^CGC"},
+  {"name": "BbvCI", "site": "CC^TCAGC"},
+  {"name": "Bpu10I", "site": "CC^TNAGC"},
+  {"name": "BseYI", "site": "C^CCAGC"},
+  {"name": "BsmAI", "site": "GTCTCN^NNNN"},
+  {"name": "BsmI", "site": "GAATGCN^"},
+  {"name": "BssSI-v2", "site": "C^ACGAG"},
+  {"name": "I-CeuI", "site": "TAACTATAACGGTCCTAA^GGTAGCGAA"},
+  {"name": "I-SceI", "site": "TAGGGATAA^CAGGGTAAT"},
+  {"name": "NgoMIV", "site": "G^CCGGC"},
+  {"name": "PI-PspI", "site": "TGGCAAACAGCTATTAT^GGGTATTATGGGT"},
+  {"name": "PI-SceI", "site": "ATCTATGTCGGGTGC^GGAGAAAGAGGTAATGAAATGG"},
+  {"name": "PleI", "site": "GAGTCNNNN^N"},
+  {"name": "SfiI", "site": "GGCCNNNN^NGGCC"},
+  {"name": "SgrAI", "site": "CR^CCGGYG"}
+]

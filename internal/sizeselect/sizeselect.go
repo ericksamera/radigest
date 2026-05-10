@@ -9,10 +9,10 @@ import (
 type Model string
 
 const (
-	Hard       Model = "hard"
-	Normal     Model = "normal"
-	Triangular Model = "triangular"
-	SoftWindow Model = "soft-window"
+	ModelHard       Model = "hard"
+	ModelNormal     Model = "normal"
+	ModelTriangular Model = "triangular"
+	ModelSoftWindow Model = "soft-window"
 )
 
 type Config struct {
@@ -33,7 +33,7 @@ type Selector struct {
 func New(cfg Config) (Selector, error) {
 	cfg.Model = Model(strings.ToLower(strings.TrimSpace(string(cfg.Model))))
 	if cfg.Model == "" {
-		cfg.Model = Hard
+		cfg.Model = ModelHard
 	}
 	if cfg.Min < 0 {
 		return Selector{}, fmt.Errorf("-min must be >= 0 for size modeling (got %d)", cfg.Min)
@@ -52,20 +52,20 @@ func New(cfg Config) (Selector, error) {
 	}
 
 	switch cfg.Model {
-	case Hard:
+	case ModelHard:
 		// no additional parameters
-	case Normal:
+	case ModelNormal:
 		if !finitePositive(cfg.SD) {
 			return Selector{}, fmt.Errorf("-size-sd must be > 0 for -size-model normal (got %g)", cfg.SD)
 		}
 		if !finite(cfg.Mean) {
 			return Selector{}, fmt.Errorf("-size-mean must be finite for -size-model normal (got %g)", cfg.Mean)
 		}
-	case Triangular:
+	case ModelTriangular:
 		if !finite(cfg.Mean) || cfg.Mean <= float64(cfg.Min) || cfg.Mean >= float64(cfg.Max) {
 			return Selector{}, fmt.Errorf("-size-mean must be inside (-min,-max) for -size-model triangular (got mean=%g min=%d max=%d)", cfg.Mean, cfg.Min, cfg.Max)
 		}
-	case SoftWindow:
+	case ModelSoftWindow:
 		if !finitePositive(cfg.EdgeSD) {
 			return Selector{}, fmt.Errorf("-size-edge-sd must be > 0 for -size-model soft-window (got %g)", cfg.EdgeSD)
 		}
@@ -97,15 +97,15 @@ func (s Selector) InHardWindow(length int) bool {
 func (s Selector) Weight(length int) float64 {
 	l := float64(length)
 	switch s.cfg.Model {
-	case Hard:
+	case ModelHard:
 		if s.InHardWindow(length) {
 			return 1
 		}
 		return 0
-	case Normal:
+	case ModelNormal:
 		z := (l - s.cfg.Mean) / s.cfg.SD
 		return math.Exp(-0.5 * z * z)
-	case Triangular:
+	case ModelTriangular:
 		if l < float64(s.cfg.Min) || l > float64(s.cfg.Max) {
 			return 0
 		}
@@ -116,7 +116,7 @@ func (s Selector) Weight(length int) float64 {
 			return clamp01((l - float64(s.cfg.Min)) / (s.cfg.Mean - float64(s.cfg.Min)))
 		}
 		return clamp01((float64(s.cfg.Max) - l) / (float64(s.cfg.Max) - s.cfg.Mean))
-	case SoftWindow:
+	case ModelSoftWindow:
 		left := sigmoid((l - float64(s.cfg.Min)) / s.cfg.EdgeSD)
 		right := sigmoid((float64(s.cfg.Max) - l) / s.cfg.EdgeSD)
 		return left * right
@@ -169,12 +169,12 @@ func NewStats(s Selector) Stats {
 		ScoreMax: cfg.ScoreMax,
 	}
 	switch cfg.Model {
-	case Normal:
+	case ModelNormal:
 		st.Mean = cfg.Mean
 		st.SD = cfg.SD
-	case Triangular:
+	case ModelTriangular:
 		st.Mean = cfg.Mean
-	case SoftWindow:
+	case ModelSoftWindow:
 		st.EdgeSD = cfg.EdgeSD
 	}
 	return st

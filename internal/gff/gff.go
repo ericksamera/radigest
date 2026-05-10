@@ -31,13 +31,14 @@ func Write(w io.Writer, chr string, frags []digest.Fragment) error {
 	if _, err := bw.WriteString("##gff-version 3\n"); err != nil {
 		return err
 	}
+	seqid := EscapeSeqID(chr)
 	for i, f := range frags {
 		start := f.Start + 1 // 1-based
 		end := f.End         // half-open → closed
 		if _, err := fmt.Fprintf(
 			bw,
-			"%s\tradigest\tfragment\t%d\t%d\t.\t+\t.\tID=frag%d\n",
-			chr, start, end, i+1,
+			"%s\tradigest\tfragment\t%d\t%d\t.\t+\t.\tID=%s\n",
+			seqid, start, end, EscapeAttributeValue(fmt.Sprintf("frag%d", i+1)),
 		); err != nil {
 			return err
 		}

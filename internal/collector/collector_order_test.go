@@ -10,8 +10,14 @@ import (
 )
 
 func TestCollector_OutOfOrderIdxWritesInOrder(t *testing.T) {
-	tmp, _ := os.CreateTemp("", "frag*.gff")
+	tmp, err := os.CreateTemp("", "frag*.gff")
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer func() { _ = os.Remove(tmp.Name()) }()
+	if err := tmp.Close(); err != nil {
+		t.Fatal(err)
+	}
 
 	in, done, err := New(tmp.Name())
 	if err != nil {
@@ -24,7 +30,10 @@ func TestCollector_OutOfOrderIdxWritesInOrder(t *testing.T) {
 	close(in)
 	<-done
 
-	f, _ := os.Open(tmp.Name())
+	f, err := os.Open(tmp.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer func() { _ = f.Close() }()
 	sc := bufio.NewScanner(f)
 
@@ -41,10 +50,19 @@ func TestCollector_OutOfOrderIdxWritesInOrder(t *testing.T) {
 }
 
 func TestCollector_EmptyThenNonEmpty(t *testing.T) {
-	tmp, _ := os.CreateTemp("", "frag*.gff")
+	tmp, err := os.CreateTemp("", "frag*.gff")
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer func() { _ = os.Remove(tmp.Name()) }()
+	if err := tmp.Close(); err != nil {
+		t.Fatal(err)
+	}
 
-	in, done, _ := New(tmp.Name())
+	in, done, err := New(tmp.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
 	in <- Msg{Idx: 0, Chr: "empty", Frags: nil}
 	in <- Msg{Idx: 1, Chr: "chrX", Frags: []digest.Fragment{{Start: 1, End: 4}}}
 	close(in)

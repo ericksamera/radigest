@@ -6,7 +6,7 @@ import (
 )
 
 func TestHardWeight(t *testing.T) {
-	sel, err := New(Config{Model: Hard, Min: 100, Max: 200, ScoreMin: 1, ScoreMax: 500})
+	sel, err := New(Config{Model: ModelHard, Min: 100, Max: 200, ScoreMin: 1, ScoreMax: 500})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -16,7 +16,7 @@ func TestHardWeight(t *testing.T) {
 }
 
 func TestNormalWeight(t *testing.T) {
-	sel, err := New(Config{Model: Normal, Min: 100, Max: 200, ScoreMin: 1, ScoreMax: 500, Mean: 150, SD: 25})
+	sel, err := New(Config{Model: ModelNormal, Min: 100, Max: 200, ScoreMin: 1, ScoreMax: 500, Mean: 150, SD: 25})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -28,8 +28,21 @@ func TestNormalWeight(t *testing.T) {
 	}
 }
 
+func TestNormalWeightAllowsMeanOutsideHardWindow(t *testing.T) {
+	sel, err := New(Config{Model: ModelNormal, Min: 300, Max: 600, ScoreMin: 1, ScoreMax: 2000, Mean: 275, SD: 85})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if math.Abs(sel.Weight(275)-1) > 1e-12 {
+		t.Fatalf("normal at empirical mean should be 1, got %g", sel.Weight(275))
+	}
+	if !sel.InScoreRange(50) || sel.InHardWindow(50) {
+		t.Fatalf("score/hard windows not handled as expected")
+	}
+}
+
 func TestTriangularWeight(t *testing.T) {
-	sel, err := New(Config{Model: Triangular, Min: 100, Max: 200, ScoreMin: 1, ScoreMax: 500, Mean: 150})
+	sel, err := New(Config{Model: ModelTriangular, Min: 100, Max: 200, ScoreMin: 1, ScoreMax: 500, Mean: 150})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +55,7 @@ func TestTriangularWeight(t *testing.T) {
 }
 
 func TestSoftWindowWeight(t *testing.T) {
-	sel, err := New(Config{Model: SoftWindow, Min: 100, Max: 200, ScoreMin: 1, ScoreMax: 500, EdgeSD: 10})
+	sel, err := New(Config{Model: ModelSoftWindow, Min: 100, Max: 200, ScoreMin: 1, ScoreMax: 500, EdgeSD: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,10 +70,10 @@ func TestSoftWindowWeight(t *testing.T) {
 func TestInvalidConfigs(t *testing.T) {
 	bad := []Config{
 		{Model: "nope", Min: 1, Max: 10, ScoreMin: 1, ScoreMax: 10},
-		{Model: Normal, Min: 1, Max: 10, ScoreMin: 1, ScoreMax: 10, Mean: 5, SD: 0},
-		{Model: SoftWindow, Min: 1, Max: 10, ScoreMin: 1, ScoreMax: 10, EdgeSD: -1},
-		{Model: Triangular, Min: 1, Max: 10, ScoreMin: 1, ScoreMax: 10, Mean: 10},
-		{Model: Hard, Min: 1, Max: 10, ScoreMin: 20, ScoreMax: 10},
+		{Model: ModelNormal, Min: 1, Max: 10, ScoreMin: 1, ScoreMax: 10, Mean: 5, SD: 0},
+		{Model: ModelSoftWindow, Min: 1, Max: 10, ScoreMin: 1, ScoreMax: 10, EdgeSD: -1},
+		{Model: ModelTriangular, Min: 1, Max: 10, ScoreMin: 1, ScoreMax: 10, Mean: 10},
+		{Model: ModelHard, Min: 1, Max: 10, ScoreMin: 20, ScoreMax: 10},
 	}
 	for _, cfg := range bad {
 		if _, err := New(cfg); err == nil {
@@ -70,7 +83,7 @@ func TestInvalidConfigs(t *testing.T) {
 }
 
 func TestStatsAdd(t *testing.T) {
-	sel, err := New(Config{Model: Hard, Min: 100, Max: 200, ScoreMin: 1, ScoreMax: 500})
+	sel, err := New(Config{Model: ModelHard, Min: 100, Max: 200, ScoreMin: 1, ScoreMax: 500})
 	if err != nil {
 		t.Fatal(err)
 	}

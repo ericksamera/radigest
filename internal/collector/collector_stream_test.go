@@ -15,7 +15,9 @@ func TestWriterWriteStream(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = os.Remove(tmp.Name()) }()
-	_ = tmp.Close()
+	if err := tmp.Close(); err != nil {
+		t.Fatal(err)
+	}
 
 	w, err := NewWriter(tmp.Name())
 	if err != nil {

@@ -1,0 +1,7 @@
+[
+  {"canonical": "EcoRI", "aliases": ["EcoRI-HF"], "reason": "same sequence-level recognition and cut behavior in radigest"},
+  {"canonical": "BamHI", "aliases": ["BamHI-HF"], "reason": "same sequence-level recognition and cut behavior in radigest"},
+  {"canonical": "AgeI", "aliases": ["AgeI-HF"], "reason": "same sequence-level recognition and cut behavior in radigest"},
+  {"canonical": "ApoI", "aliases": ["ApoI-HF"], "reason": "same sequence-level recognition and cut behavior in radigest"},
+  {"canonical": "BsiWI", "aliases": ["BsiWI-HF"], "reason": "same sequence-level recognition and cut behavior in radigest"}
+]

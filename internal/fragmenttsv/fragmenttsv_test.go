@@ -41,6 +41,19 @@ func TestWriter(t *testing.T) {
 	}
 }
 
+func TestDisabledWriterNoops(t *testing.T) {
+	w, err := New("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Write("chr1", digest.Fragment{Start: 0, End: 1}, false, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestNilWriterNoops(t *testing.T) {
 	var w *Writer
 	if err := w.Write("chr1", digest.Fragment{Start: 0, End: 1}, false, 0); err != nil {
