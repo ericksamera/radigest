@@ -3,7 +3,6 @@ package digest
 import (
 	"fmt"
 	"strings"
-	"sync"
 
 	"github.com/KPU-AGC/radigest/internal/enzyme"
 )
@@ -35,7 +34,9 @@ func NewPlanWithOptions(ens []enzyme.Enzyme, opt Options) Plan {
 	p.allowSame = opt.AllowSame
 
 	n := 2
-	if len(ens) < n { n = len(ens) }
+	if len(ens) < n {
+		n = len(ens)
+	}
 	for i := 0; i < n; i++ {
 		e := ens[i]
 		site := e.Recognition
@@ -59,122 +60,138 @@ func NewPlanWithOptions(ens []enzyme.Enzyme, opt Options) Plan {
 // Back-compat.
 func NewPlan(ens []enzyme.Enzyme) Plan { return NewPlanWithOptions(ens, Options{}) }
 
-var intSlicePool = sync.Pool{
-	New: func() any {
-		s := make([]int, 0, 1024)
-		return &s
-	},
+type cutScanner struct {
+	mat matcher
+	seq []byte
+	pos int
 }
 
-// Digest supports:
-//   • single‑enzyme mode (only A configured): consecutive A cuts
-//   • double‑enzyme mode (A,B): adjacent AB/BA only (or AA/BB too if allowSame)
-func (p Plan) Digest(seq []byte, min, max int) []Fragment {
+func newCutScanner(mat matcher, seq []byte) cutScanner {
+	return cutScanner{mat: mat, seq: seq}
+}
+
+func (s *cutScanner) next() (int, bool) {
+	n := len(s.mat.mask)
+	if n == 0 || len(s.seq) < n {
+		return 0, false
+	}
+	for s.pos <= len(s.seq)-n {
+		pos := s.pos
+		s.pos++
+		if enzyme.MatchMask(s.mat.mask, s.seq[pos:pos+n]) {
+			return pos + s.mat.offset, true
+		}
+	}
+	return 0, false
+}
+
+func emitIfKept(start, end, min, max int, emit func(Fragment) error) error {
+	if ln := end - start; ln >= min && ln <= max {
+		return emit(Fragment{Start: start, End: end})
+	}
+	return nil
+}
+
+// DigestEach streams kept fragments to emit without materializing cut arrays or
+// a per-chromosome []Fragment. It supports the same modes as Digest:
+//   - single-enzyme mode (only A configured): consecutive A cuts
+//   - double-enzyme mode (A,B): adjacent AB/BA only, or AA/BB too if AllowSame
+//
+// The callback is invoked in deterministic genomic cut-coordinate order. If emit
+// returns an error, scanning stops and that error is returned.
+func (p Plan) DigestEach(seq []byte, min, max int, emit func(Fragment) error) error {
 	if p.m[0].mask == nil { // no enzymes compiled
 		return nil
 	}
-
-	// Scan for A and B cuts (if B is present). Slices are naturally sorted.
-	aBuf := intSlicePool.Get().(*[]int)
-	bBuf := intSlicePool.Get().(*[]int)
-
-	aCuts := (*aBuf)[:0]
-	bCuts := (*bBuf)[:0]
-
-	defer func() {
-		*aBuf = (*aBuf)[:0]
-		*bBuf = (*bBuf)[:0]
-		intSlicePool.Put(aBuf)
-		intSlicePool.Put(bBuf)
-	}()
-
-	// A cuts
-	{
-		mat := p.m[0]
-		n := len(mat.mask)
-		if n > 0 && len(seq) >= n {
-			for pos := 0; pos <= len(seq)-n; pos++ {
-				if enzyme.MatchMask(mat.mask, seq[pos:pos+n]) {
-					aCuts = append(aCuts, pos+mat.offset)
-				}
-			}
-		}
+	if emit == nil {
+		return fmt.Errorf("digest emit callback is nil")
 	}
 
-	// Single‑enzyme mode
+	aScan := newCutScanner(p.m[0], seq)
+	aPos, aOK := aScan.next()
+
+	// Single-enzyme mode: only the previous cut coordinate is needed.
 	if p.m[1].mask == nil {
-		out := make([]Fragment, 0, len(aCuts))
-		for k := 1; k < len(aCuts); k++ {
-			if ln := aCuts[k] - aCuts[k-1]; ln >= min && ln <= max {
-				out = append(out, Fragment{Start: aCuts[k-1], End: aCuts[k]})
-			}
+		if !aOK {
+			return nil
 		}
-		return out
-	}
-
-	// Double‑enzyme mode: also collect B cuts
-	{
-		mat := p.m[1]
-		n := len(mat.mask)
-		if n > 0 && len(seq) >= n {
-			for pos := 0; pos <= len(seq)-n; pos++ {
-				if enzyme.MatchMask(mat.mask, seq[pos:pos+n]) {
-					bCuts = append(bCuts, pos+mat.offset)
-				}
+		prevPos := aPos
+		for {
+			pos, ok := aScan.next()
+			if !ok {
+				return nil
 			}
+			if err := emitIfKept(prevPos, pos, min, max, emit); err != nil {
+				return err
+			}
+			prevPos = pos
 		}
 	}
 
-	// Merge over positions. If both enzymes cut at the same position,
-	// emit a single zero-length fragment (if allowed by min/max) and
-	// reset adjacency to avoid "bridging" across that coincident cut.
-	out := make([]Fragment, 0, (len(aCuts)+len(bCuts))/2)
-	i, j := 0, 0
+	// Double-enzyme mode: merge the two naturally sorted cut-coordinate streams.
+	bScan := newCutScanner(p.m[1], seq)
+	bPos, bOK := bScan.next()
 	prevType := -1 // 0=A, 1=B
 	prevPos := 0
 
-	for i < len(aCuts) || j < len(bCuts) {
+	for aOK || bOK {
 		var pos int
-		if i < len(aCuts) && (j >= len(bCuts) || aCuts[i] <= bCuts[j]) {
-			pos = aCuts[i]
+		if aOK && (!bOK || aPos <= bPos) {
+			pos = aPos
 		} else {
-			pos = bCuts[j]
+			pos = bPos
 		}
-		hasA := i < len(aCuts) && aCuts[i] == pos
-		hasB := j < len(bCuts) && bCuts[j] == pos
+		hasA := aOK && aPos == pos
+		hasB := bOK && bPos == pos
 
 		if hasA && hasB {
-			// coincident cuts
-			if 0 >= min && 0 <= max {
-				out = append(out, Fragment{Start: pos, End: pos})
+			// Coincident cuts are barriers. Emit one zero-length fragment for the
+			// site if the caller's size range allows it, then reset adjacency so no
+			// fragment bridges across the coincident cut.
+			if err := emitIfKept(pos, pos, min, max, emit); err != nil {
+				return err
 			}
-			i++
-			j++
-			prevType = -1 // barrier: do not bridge across coincident cuts
+			aPos, aOK = aScan.next()
+			bPos, bOK = bScan.next()
+			prevType = -1
 			prevPos = pos
 			continue
 		}
 
-		var curType int
+		curType := 0
 		if hasA {
-			curType = 0
-			i++
+			aPos, aOK = aScan.next()
 		} else {
 			curType = 1
-			j++
+			bPos, bOK = bScan.next()
 		}
 
 		if prevType != -1 && (p.allowSame || prevType != curType) {
-			if ln := pos - prevPos; ln >= min && ln <= max {
-				out = append(out, Fragment{Start: prevPos, End: pos})
+			if err := emitIfKept(prevPos, pos, min, max, emit); err != nil {
+				return err
 			}
 		}
 		prevType, prevPos = curType, pos
 	}
+	return nil
+}
+
+// Digest supports:
+//   - single-enzyme mode (only A configured): consecutive A cuts
+//   - double-enzyme mode (A,B): adjacent AB/BA only (or AA/BB too if allowSame)
+func (p Plan) Digest(seq []byte, min, max int) []Fragment {
+	if p.m[0].mask == nil { // no enzymes compiled
+		return nil
+	}
+	out := make([]Fragment, 0)
+	_ = p.DigestEach(seq, min, max, func(fr Fragment) error {
+		out = append(out, fr)
+		return nil
+	})
 	return out
 }
 
-// Back‑compat convenience: compile plan per call.
+// Back-compat convenience: compile plan per call.
 func Digest(seq []byte, ens []enzyme.Enzyme, min, max int) []Fragment {
 	return NewPlan(ens).Digest(seq, min, max)
 }

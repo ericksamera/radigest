@@ -15,25 +15,43 @@ import (
 	"github.com/KPU-AGC/radigest/internal/digest"
 	"github.com/KPU-AGC/radigest/internal/enzyme"
 	"github.com/KPU-AGC/radigest/internal/fasta"
+	"github.com/KPU-AGC/radigest/internal/fragmenttsv"
 	"github.com/KPU-AGC/radigest/internal/sim"
+	"github.com/KPU-AGC/radigest/internal/sizeselect"
 )
 
 var (
-	version = "v1.3.1"
+	version = "v1.4.0"
 )
+
+type digestResult struct {
+	idx    int
+	chr    string
+	frags  <-chan digest.Fragment
+	errors <-chan error
+}
 
 func main() {
 	// ---- CLI flags ----------------------------------------------------------
 	fastaPath := flag.String("fasta", "", "reference FASTA file")
 	enzFlag := flag.String("enzymes", "", "comma-separated enzyme names (one or two; two form the AB pair)")
-	minLen := flag.Int("min", 1, "minimum fragment length (bp)")
-	maxLen := flag.Int("max", 1<<30, "maximum fragment length (bp)")
-	gffPath := flag.String("gff", "fragments.gff3", "output GFF3 file (path or '-' for stdout)")
+	minLen := flag.Int("min", 1, "minimum fragment length (bp) for hard-selected GFF output")
+	maxLen := flag.Int("max", 1<<30, "maximum fragment length (bp) for hard-selected GFF output")
+	gffPath := flag.String("gff", "fragments.gff3", "output GFF3 file for hard-selected fragments (path or '-' for stdout)")
+	fragmentsTSVPath := flag.String("fragments-tsv", "fragments.tsv", "per-fragment TSV for score-range fragments; empty string disables")
 	jsonPath := flag.String("json", "", "optional: write run summary JSON here")
 	threads := flag.Int("threads", runtime.NumCPU(), "number of worker goroutines")
 	verbose := flag.Bool("v", false, "verbose progress to stderr")
 	showVer := flag.Bool("version", false, "print version and exit")
 	listEns := flag.Bool("list-enzymes", false, "list available enzyme names and exit")
+
+	// size-selection scoring
+	scoreMinFlag := flag.Int("score-min", -1, "minimum fragment length included in fragments TSV and size-selection stats; default -min")
+	scoreMaxFlag := flag.Int("score-max", -1, "maximum fragment length included in fragments TSV and size-selection stats; default -max")
+	sizeModel := flag.String("size-model", "hard", "size-selection model: hard, normal, triangular, or soft-window")
+	sizeMean := flag.Float64("size-mean", 0, "target/peak insert length for normal/triangular models; default midpoint of -min/-max")
+	sizeSD := flag.Float64("size-sd", 35, "standard deviation for -size-model normal")
+	sizeEdgeSD := flag.Float64("size-edge-sd", 25, "edge softness for -size-model soft-window")
 
 	// double-digest behavior & validation
 	allowSame := flag.Bool("allow-same", false, "double digest: also keep AA/BB neighbors (default AB/BA only)")
@@ -50,7 +68,7 @@ func main() {
 		fmt.Fprintln(b, "License: MIT")
 		fmt.Fprintln(b, "Version:", version)
 		fmt.Fprintln(b)
-		fmt.Fprintln(b, "radigest — in-silico single/double digest and GFF3 fragment export")
+		fmt.Fprintln(b, "radigest — in-silico single/double digest and GFF3/TSV fragment export")
 		fmt.Fprintln(b)
 		fmt.Fprintln(b, "Usage:")
 		fmt.Fprintln(b, "  radigest -fasta <ref.fa|-> -enzymes <E1[,E2]> [options]")
@@ -69,8 +87,10 @@ func main() {
 		fmt.Fprintln(b, "  zcat ref.fa.gz | radigest -fasta - -enzymes EcoRI,MseI -gff - | bgzip > frag.gff3.gz")
 		fmt.Fprintln(b, "  # Single digest (EcoRI) to file")
 		fmt.Fprintln(b, "  radigest -fasta ref.fa -enzymes EcoRI -gff out.gff3")
-		fmt.Fprintln(b, "  # Double digest with size selection + JSON summary")
+		fmt.Fprintln(b, "  # Double digest with hard size selection + JSON summary")
 		fmt.Fprintln(b, "  radigest -fasta ref.fa -enzymes EcoRI,MseI -min 100 -max 800 -json run.json")
+		fmt.Fprintln(b, "  # Double digest with soft-window scoring and broad per-fragment TSV")
+		fmt.Fprintln(b, "  radigest -fasta ref.fa -enzymes PstI,MspI -min 250 -max 500 -score-min 1 -score-max 1000 -size-model soft-window -size-edge-sd 25 -fragments-tsv fragments.tsv -json run.json")
 		fmt.Fprintln(b, "  # Simulate a 10 Mb genome at 42% GC and digest (chromosome name is always chr1)")
 		fmt.Fprintln(b, "  radigest -sim-len 10000000 -sim-gc 0.42 -enzymes EcoRI,MseI -gff out.gff3")
 		fmt.Fprint(os.Stderr, b.String())
@@ -117,6 +137,33 @@ func main() {
 		}
 	}
 
+	scoreMin := *scoreMinFlag
+	if scoreMin < 0 {
+		scoreMin = *minLen
+	}
+	scoreMax := *scoreMaxFlag
+	if scoreMax < 0 {
+		scoreMax = *maxLen
+	}
+	selector, err := sizeselect.New(sizeselect.Config{
+		Model:    sizeselect.Model(*sizeModel),
+		Min:      *minLen,
+		Max:      *maxLen,
+		ScoreMin: scoreMin,
+		ScoreMax: scoreMax,
+		Mean:     *sizeMean,
+		SD:       *sizeSD,
+		EdgeSD:   *sizeEdgeSD,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Digest the union of the hard GFF window and the broader scoring window.
+	// The writer decides which fragments go to GFF and which go to TSV/stats.
+	digestMin := minInt(*minLen, scoreMin)
+	digestMax := maxInt(*maxLen, scoreMax)
+
 	// ---- compile enzymes ----------------------------------------------------
 	ens, enzymeNames, err := parseEnzymes(*enzFlag)
 	if err != nil {
@@ -127,10 +174,14 @@ func main() {
 		StrictCuts: *strictCuts,
 	})
 
-	// ---- start collector ----------------------------------------------------
-	cIn, done, err := collector.New(*gffPath)
+	// ---- start writers -------------------------------------------------------
+	writer, err := collector.NewWriter(*gffPath)
 	if err != nil {
 		log.Fatalf("collector: %v", err)
+	}
+	fragWriter, err := fragmenttsv.New(*fragmentsTSVPath)
+	if err != nil {
+		log.Fatalf("fragments tsv: %v", err)
 	}
 
 	// ---- worker pool --------------------------------------------------------
@@ -139,20 +190,31 @@ func main() {
 		rec fasta.Record
 	}
 	jobs := make(chan job, *threads)
+	results := make(chan digestResult, *threads)
 	var wg sync.WaitGroup
 	for i := 0; i < *threads; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for j := range jobs {
-				frags := plan.Digest(j.rec.Seq, *minLen, *maxLen)
-				cIn <- collector.Msg{Idx: j.idx, Chr: j.rec.ID, Frags: frags}
-				if *verbose {
-					fmt.Fprintf(os.Stderr, "chr=%s fragments=%d\n", j.rec.ID, len(frags))
-				}
+				fragCh := make(chan digest.Fragment, 64)
+				errCh := make(chan error, 1)
+				results <- digestResult{idx: j.idx, chr: j.rec.ID, frags: fragCh, errors: errCh}
+
+				err := plan.DigestEach(j.rec.Seq, digestMin, digestMax, func(fr digest.Fragment) error {
+					fragCh <- fr
+					return nil
+				})
+				close(fragCh)
+				errCh <- err
+				close(errCh)
 			}
 		}()
 	}
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
 
 	// ---- source: FASTA or synthetic ----------------------------------------
 	faCh := make(chan fasta.Record)
@@ -177,23 +239,36 @@ func main() {
 	}()
 
 	// ---- wait + finalize ----------------------------------------------------
-	wg.Wait()
-	close(cIn)
+	sizeStats, streamErr := writeResultStreamsScored(writer, fragWriter, selector, results, *verbose)
+	stats, closeErr := writer.Close()
+	fragCloseErr := fragWriter.Close()
+	if streamErr != nil {
+		log.Fatalf("digest/write: %v", streamErr)
+	}
+	if closeErr != nil {
+		log.Fatalf("collector: %v", closeErr)
+	}
+	if fragCloseErr != nil {
+		log.Fatalf("fragments tsv: %v", fragCloseErr)
+	}
 
-	stats := <-done
 	fmt.Fprintf(os.Stderr, "Fragments kept: %d\nBases covered: %d\nChromosomes: %d\n",
 		stats.TotalFragments, stats.TotalBases, len(stats.PerChr))
 	if *jsonPath != "" {
 		out := struct {
-			Enzymes   []string `json:"enzymes"`
-			MinLength int      `json:"min_length"`
-			MaxLength int      `json:"max_length"`
+			Enzymes       []string         `json:"enzymes"`
+			MinLength     int              `json:"min_length"`
+			MaxLength     int              `json:"max_length"`
+			FragmentsTSV  string           `json:"fragments_tsv,omitempty"`
+			SizeSelection sizeselect.Stats `json:"size_selection"`
 			collector.Stats
 		}{
-			Enzymes:   enzymeNames,
-			MinLength: *minLen,
-			MaxLength: *maxLen,
-			Stats:     stats,
+			Enzymes:       enzymeNames,
+			MinLength:     *minLen,
+			MaxLength:     *maxLen,
+			FragmentsTSV:  *fragmentsTSVPath,
+			SizeSelection: sizeStats,
+			Stats:         stats,
 		}
 		f, err := os.Create(*jsonPath)
 		if err != nil {
@@ -204,4 +279,126 @@ func main() {
 		}
 		_ = f.Close()
 	}
+}
+
+func writeResultStreams(w *collector.Writer, results <-chan digestResult, verbose bool) error {
+	pending := make(map[int]digestResult)
+	next := 0
+
+	for results != nil || len(pending) > 0 {
+		if r, ok := pending[next]; ok {
+			cs, writeErr := w.WriteStream(r.chr, r.frags)
+			digestErr := <-r.errors
+			delete(pending, next)
+			next++
+
+			if verbose {
+				fmt.Fprintf(os.Stderr, "chr=%s fragments=%d\n", r.chr, cs.Fragments)
+			}
+			if writeErr != nil {
+				return fmt.Errorf("write fragments for %s: %w", r.chr, writeErr)
+			}
+			if digestErr != nil {
+				return fmt.Errorf("digest %s: %w", r.chr, digestErr)
+			}
+			continue
+		}
+
+		if results == nil {
+			return fmt.Errorf("missing digest result for chromosome index %d", next)
+		}
+		r, ok := <-results
+		if !ok {
+			results = nil
+			continue
+		}
+		pending[r.idx] = r
+	}
+	return nil
+}
+
+func writeResultStreamsScored(w *collector.Writer, tsv *fragmenttsv.Writer, selector sizeselect.Selector, results <-chan digestResult, verbose bool) (sizeselect.Stats, error) {
+	pending := make(map[int]digestResult)
+	next := 0
+	stats := sizeselect.NewStats(selector)
+
+	for results != nil || len(pending) > 0 {
+		if r, ok := pending[next]; ok {
+			cs, writeErr := writeScoredChromosome(w, tsv, selector, &stats, r.chr, r.frags)
+			digestErr := <-r.errors
+			delete(pending, next)
+			next++
+
+			if verbose {
+				fmt.Fprintf(os.Stderr, "chr=%s fragments=%d scored=%d\n", r.chr, cs.Fragments, stats.RawFragmentsScored)
+			}
+			if writeErr != nil {
+				return stats, fmt.Errorf("write fragments for %s: %w", r.chr, writeErr)
+			}
+			if digestErr != nil {
+				return stats, fmt.Errorf("digest %s: %w", r.chr, digestErr)
+			}
+			continue
+		}
+
+		if results == nil {
+			return stats, fmt.Errorf("missing digest result for chromosome index %d", next)
+		}
+		r, ok := <-results
+		if !ok {
+			results = nil
+			continue
+		}
+		pending[r.idx] = r
+	}
+	return stats, nil
+}
+
+func writeScoredChromosome(w *collector.Writer, tsv *fragmenttsv.Writer, selector sizeselect.Selector, stats *sizeselect.Stats, chr string, frags <-chan digest.Fragment) (collector.ChrStats, error) {
+	var local collector.ChrStats
+	var firstErr error
+	ordinal := 1
+
+	for fr := range frags {
+		length := fr.End - fr.Start
+		hardKept := selector.InHardWindow(length)
+		if hardKept {
+			stats.AddHardKept(length)
+		}
+		if selector.InScoreRange(length) {
+			weight := selector.Weight(length)
+			stats.AddScored(length, weight)
+			if firstErr == nil {
+				if err := tsv.Write(chr, fr, hardKept, weight); err != nil {
+					firstErr = err
+				}
+			}
+		}
+		if hardKept {
+			if firstErr == nil {
+				if err := w.WriteFragment(chr, ordinal, fr); err != nil {
+					firstErr = err
+				} else {
+					local.Fragments++
+					local.Bases += length
+				}
+			}
+			ordinal++
+		}
+	}
+	return local, firstErr
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
