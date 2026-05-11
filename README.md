@@ -117,3 +117,68 @@ chr1	18831	18922	91	false	0.014221
   "per_chromosome": { "chr1": { "fragments": 23456, "bases": 3456789 } }
 }
 ```
+
+---
+
+## Pair-screening helper scripts
+
+The Go CLI intentionally stays focused on digesting and fragment scoring. For larger ddRAD/GBS design screens, use the helper scripts in `scripts/` to run many enzyme pairs and rank the resulting JSON summaries.
+
+Create a candidate enzyme list:
+
+```bash
+cat > candidate_enzymes.txt <<'EOF2'
+EcoRI
+MseI
+PstI
+MspI
+ApeKI
+NlaIII
+MluCI
+BfaI
+EOF2
+```
+
+Run every unique pair using an empirically calibrated size model. This example uses the sockeye ddRAD profile fitted from observed TLENs, `normal(mean=275, sd=85)`:
+
+```bash
+python scripts/screen_pairs.py \
+  --fasta ref.fa \
+  --enzymes candidate_enzymes.txt \
+  --min 300 \
+  --max 600 \
+  --score-min 1 \
+  --score-max 2000 \
+  --size-model normal \
+  --size-mean 275 \
+  --size-sd 85 \
+  --jobs 2 \
+  --radigest-threads 2 \
+  --out-dir pair_screen
+```
+
+The screen writes one JSON summary per pair under `pair_screen/json/` and logs under `pair_screen/logs/`. It disables GFF and fragment TSV output for speed during initial screening.
+
+Rank pairs by weighted bases, or by genome percentage if a FASTA denominator is provided:
+
+```bash
+# Rank by weighted recovered insert-bases
+python scripts/rank_pairs.py 'pair_screen/json/*.json' \
+  --objective weighted-bases \
+  --out pair_screen/ranked_pairs.tsv
+
+# Rank by weighted genome percentage using non-N reference bases as denominator
+python scripts/rank_pairs.py 'pair_screen/json/*.json' \
+  --fasta ref.fa \
+  --objective weighted-genome-pct \
+  --out pair_screen/ranked_pairs.genome_pct.tsv
+
+# Find pairs closest to a target weighted genome percentage
+python scripts/rank_pairs.py 'pair_screen/json/*.json' \
+  --fasta ref.fa \
+  --objective closest-target \
+  --target-genome-pct 2.5 \
+  --out pair_screen/ranked_pairs.closest_2.5pct.tsv
+```
+
+The ranked TSV includes `weighted_bases`, `weighted_fragments`, `raw_bases_in_window`, `raw_fragments_in_window`, `mean_weighted_length`, and genome-percentage columns when a denominator is supplied.
