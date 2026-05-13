@@ -19,19 +19,22 @@ type matcher struct {
 }
 
 type Options struct {
-	AllowSame  bool // keep AA/BB neighbors in double digest
-	StrictCuts bool // error if site has no caret and CutIndex==0 (mid-site fallback)
+	AllowSame   bool // keep AA/BB neighbors in double digest
+	StrictCuts  bool // error if site has no caret and CutIndex==0 (mid-site fallback)
+	IncludeEnds bool // also emit terminal chromosome/contig-end fragments
 }
 
 // Plan precompiles up to two enzymes (A,B) for fast reuse.
 type Plan struct {
-	m         [2]matcher // m[0] = A (required), m[1] = B (optional)
-	allowSame bool
+	m           [2]matcher // m[0] = A (required), m[1] = B (optional)
+	allowSame   bool
+	includeEnds bool
 }
 
 func NewPlanWithOptions(ens []enzyme.Enzyme, opt Options) Plan {
 	var p Plan
 	p.allowSame = opt.AllowSame
+	p.includeEnds = opt.IncludeEnds
 
 	n := 2
 	if len(ens) < n {
@@ -92,10 +95,18 @@ func emitIfKept(start, end, min, max int, emit func(Fragment) error) error {
 	return nil
 }
 
+func emitTerminalIfKept(start, end, min, max int, emit func(Fragment) error) error {
+	if end <= start {
+		return nil
+	}
+	return emitIfKept(start, end, min, max, emit)
+}
+
 // DigestEach streams kept fragments to emit without materializing cut arrays or
 // a per-chromosome []Fragment. It supports the same modes as Digest:
 //   - single-enzyme mode (only A configured): consecutive A cuts
 //   - double-enzyme mode (A,B): adjacent AB/BA only, or AA/BB too if AllowSame
+//   - optional terminal chromosome/contig-end fragments if IncludeEnds is set
 //
 // The callback is invoked in deterministic genomic cut-coordinate order. If emit
 // returns an error, scanning stops and that error is returned.
@@ -113,12 +124,23 @@ func (p Plan) DigestEach(seq []byte, min, max int, emit func(Fragment) error) er
 	// Single-enzyme mode: only the previous cut coordinate is needed.
 	if p.m[1].mask == nil {
 		if !aOK {
+			if p.includeEnds {
+				return emitTerminalIfKept(0, len(seq), min, max, emit)
+			}
 			return nil
+		}
+		if p.includeEnds {
+			if err := emitTerminalIfKept(0, aPos, min, max, emit); err != nil {
+				return err
+			}
 		}
 		prevPos := aPos
 		for {
 			pos, ok := aScan.next()
 			if !ok {
+				if p.includeEnds {
+					return emitTerminalIfKept(prevPos, len(seq), min, max, emit)
+				}
 				return nil
 			}
 			if err := emitIfKept(prevPos, pos, min, max, emit); err != nil {
@@ -133,6 +155,8 @@ func (p Plan) DigestEach(seq []byte, min, max int, emit func(Fragment) error) er
 	bPos, bOK := bScan.next()
 	prevType := -1 // 0=A, 1=B
 	prevPos := 0
+	sawCut := false
+	lastPos := 0
 
 	for aOK || bOK {
 		var pos int
@@ -143,6 +167,14 @@ func (p Plan) DigestEach(seq []byte, min, max int, emit func(Fragment) error) er
 		}
 		hasA := aOK && aPos == pos
 		hasB := bOK && bPos == pos
+
+		if p.includeEnds && !sawCut {
+			if err := emitTerminalIfKept(0, pos, min, max, emit); err != nil {
+				return err
+			}
+		}
+		sawCut = true
+		lastPos = pos
 
 		if hasA && hasB {
 			// Coincident cuts are barriers. Emit one zero-length fragment for the
@@ -172,6 +204,12 @@ func (p Plan) DigestEach(seq []byte, min, max int, emit func(Fragment) error) er
 			}
 		}
 		prevType, prevPos = curType, pos
+	}
+	if p.includeEnds {
+		if !sawCut {
+			return emitTerminalIfKept(0, len(seq), min, max, emit)
+		}
+		return emitTerminalIfKept(lastPos, len(seq), min, max, emit)
 	}
 	return nil
 }

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Rank radigest pair-screen JSON summaries.
 
-The script computes raw and weighted genome percentages when a genome-size
+The command can compute raw and weighted genome percentages when a genome-size
 basis is provided. Use --fasta for an automatic denominator or --genome-bases
 when the denominator is already known.
 """
@@ -98,12 +98,7 @@ def as_int(value: Any) -> int:
     return int(value)
 
 
-def score_pair(
-    path: Path,
-    genome_bases: int | None,
-    objective: str,
-    target_genome_pct: float | None,
-) -> RankedPair:
+def score_pair(path: Path, genome_bases: int | None, objective: str, target_genome_pct: float | None) -> RankedPair:
     doc = json.loads(path.read_text())
     enzymes = doc.get("enzymes", ["", ""])
     enzyme_a = enzymes[0] if len(enzymes) > 0 else ""
@@ -238,11 +233,7 @@ def write_rows(rows: list[RankedPair], out: TextIO) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Rank radigest pair-screen JSON outputs.")
-    parser.add_argument(
-        "json",
-        nargs="+",
-        help="JSON files or glob patterns, e.g. 'pair_screen/json/*.json'",
-    )
+    parser.add_argument("json", nargs="+", help="JSON files or glob patterns, e.g. 'pair_screen/json/*.json'")
     denom = parser.add_mutually_exclusive_group()
     denom.add_argument("--fasta", type=Path, help="reference FASTA for denominator")
     denom.add_argument("--genome-bases", type=int, help="explicit genome denominator")
@@ -278,18 +269,12 @@ def main() -> int:
     if args.fasta is not None:
         bases = fasta_bases(args.fasta)
         genome_bases = bases.non_n_bases if args.denominator == "non-n" else bases.all_bases
-        print(
-            f"genome_bases\t{genome_bases}\tdenominator\t{args.denominator}",
-            file=sys.stderr,
-        )
+        print(f"genome_bases\t{genome_bases}\tdenominator\t{args.denominator}", file=sys.stderr)
 
     if args.objective == "closest-target" and args.target_genome_pct is None:
         raise SystemExit("--objective closest-target requires --target-genome-pct")
 
-    rows = [
-        score_pair(path, genome_bases, args.objective, args.target_genome_pct)
-        for path in load_json_paths(args.json)
-    ]
+    rows = [score_pair(path, genome_bases, args.objective, args.target_genome_pct) for path in load_json_paths(args.json)]
     rows.sort(key=lambda row: row.score, reverse=True)
     if args.top is not None:
         rows = rows[: args.top]

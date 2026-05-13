@@ -10,7 +10,7 @@ Fast in-silico restriction digest for genomics. Give it a reference FASTA (plain
 
 ## Features
 
-- **Single or double digest.** Double-digest keeps **adjacent AB/BA** by default; enable **AA/BB** too with `-allow-same`. Single-digest uses consecutive A cuts.
+- **Single or double digest.** Double-digest keeps **adjacent AB/BA** by default; enable **AA/BB** too with `-allow-same`. Single-digest uses consecutive A cuts. Terminal chromosome/contig-end fragments are omitted by default; keep them with `-include-ends`.
 - **IUPAC & cut offsets.** Sites accept degenerate codes; the cut index comes from `^` in the site (or mid-site if missing). `-strict-cuts` makes missing carets an error.
 - **Robust FASTA I/O.** Read from a path or `-` (STDIN), auto-detect `.gz`, normalize case, and **trim CRLF**. `N` in the **reference** does **not** match any site.
 - **Synthetic genomes.** Generate a single-chromosome genome named `chr1` with `-sim-len`, `-sim-gc`, `-sim-seed` and digest it directly—no FASTA on disk needed.
@@ -39,6 +39,9 @@ radigest -fasta ref.fa -enzymes PstI,MspI -min 250 -max 500 -score-min 1 -score-
 # Double digest but ALSO keep AA/BB neighbors
 radigest -fasta ref.fa -enzymes EcoRI,MseI -allow-same -gff fragments.gff3
 
+# Include terminal fragments from chromosome/contig ends to the nearest cut
+radigest -fasta ref.fa -enzymes EcoRI,MseI -include-ends -gff fragments.gff3
+
 # Simulate a 10 Mb genome at 42% GC and digest
 radigest -sim-len 10000000 -sim-gc 0.42 -sim-seed 123 -enzymes EcoRI,MseI -gff out.gff3
 ```
@@ -58,7 +61,7 @@ radigest -sim-len 10000000 -sim-gc 0.42 -sim-seed 123 -enzymes EcoRI,MseI -gff o
 - `-json <path>` — write a run summary (counts, bases, per-chrom stats, and size-selection weighted stats).
 - `-threads <n>` — positive worker count; `-v`, `-version`, `-list-enzymes`.
 - **Simulation:** `-sim-len <bp>`, `-sim-gc <0..1>` (invalid values error), `-sim-seed <int>` (emits a single `chr1`).
-- **Modes:** `-allow-same` (keep AA/BB in double-digest), `-strict-cuts` (error if a site lacks `^` and would otherwise fall back to mid-site).
+- **Modes:** `-allow-same` (keep AA/BB in double-digest), `-include-ends` (also emit terminal chromosome/contig-end fragments), `-strict-cuts` (error if a site lacks `^` and would otherwise fall back to mid-site).
 
 ---
 

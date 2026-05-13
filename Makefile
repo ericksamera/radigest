@@ -1,17 +1,28 @@
 BIN_DIR := bin
+PREFIX ?= /usr/local
 GO ?= go
 
 VERSION  := $(shell git describe --tags --dirty --always 2>/dev/null || echo dev)
 GOFLAGS ?= -trimpath
 LDFLAGS := -s -w -X main.version=$(VERSION)
+SCRIPTS := scripts/radigest-screen-pairs scripts/radigest-rank-pairs scripts/radigest-fit-size-model
 
-.PHONY: all build test lint tidy clean
+.PHONY: all build install test lint tidy clean
 
 all: build
 
 build:
 	mkdir -p $(BIN_DIR)
 	$(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/radigest ./cmd/radigest
+	cp $(SCRIPTS) $(BIN_DIR)/
+	chmod 0755 $(BIN_DIR)/radigest $(BIN_DIR)/radigest-screen-pairs $(BIN_DIR)/radigest-rank-pairs $(BIN_DIR)/radigest-fit-size-model
+
+install: build
+	install -d $(DESTDIR)$(PREFIX)/bin
+	install -m 0755 $(BIN_DIR)/radigest $(DESTDIR)$(PREFIX)/bin/radigest
+	install -m 0755 $(BIN_DIR)/radigest-screen-pairs $(DESTDIR)$(PREFIX)/bin/radigest-screen-pairs
+	install -m 0755 $(BIN_DIR)/radigest-rank-pairs $(DESTDIR)$(PREFIX)/bin/radigest-rank-pairs
+	install -m 0755 $(BIN_DIR)/radigest-fit-size-model $(DESTDIR)$(PREFIX)/bin/radigest-fit-size-model
 
 test:
 	$(GO) test $(GOFLAGS) ./... -count=1

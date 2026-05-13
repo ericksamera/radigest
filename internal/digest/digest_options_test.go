@@ -1,6 +1,7 @@
 package digest
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/KPU-AGC/radigest/internal/enzyme"
@@ -18,6 +19,40 @@ func TestAllowSame_EnablesAAFragments(t *testing.T) {
 	pYes := NewPlanWithOptions([]enzyme.Enzyme{eA, eB}, Options{AllowSame: true})
 	if got := pYes.Digest(seq, 1, 1<<30); len(got) == 0 {
 		t.Fatalf("AllowSame should keep AA/BB, got 0")
+	}
+}
+
+func TestIncludeEnds_EnablesTerminalFragmentsSingleDigest(t *testing.T) {
+	eA := enzyme.DB["MluCI"] // ^AATT
+	seq := []byte("CCCCAATTGGGGAATTTT")
+
+	pNo := NewPlanWithOptions([]enzyme.Enzyme{eA}, Options{IncludeEnds: false})
+	if got, want := pNo.Digest(seq, 1, 1<<30), ([]Fragment{{Start: 4, End: 12}}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("default fragments mismatch: got %#v want %#v", got, want)
+	}
+
+	pYes := NewPlanWithOptions([]enzyme.Enzyme{eA}, Options{IncludeEnds: true})
+	got := pYes.Digest(seq, 1, 1<<30)
+	want := []Fragment{{Start: 0, End: 4}, {Start: 4, End: 12}, {Start: 12, End: 18}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("include-ends fragments mismatch: got %#v want %#v", got, want)
+	}
+}
+
+func TestIncludeEnds_EnablesTerminalFragmentsDoubleDigest(t *testing.T) {
+	eA := enzyme.DB["EcoRI"]
+	eB := enzyme.DB["MseI"]
+	p := NewPlanWithOptions([]enzyme.Enzyme{eA, eB}, Options{IncludeEnds: true})
+
+	got := p.Digest([]byte(toyChr), 1, 1<<30)
+	want := []Fragment{
+		{Start: 0, End: 5},
+		{Start: 5, End: 11},
+		{Start: 11, End: 16},
+		{Start: 16, End: len(toyChr)},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("include-ends fragments mismatch: got %#v want %#v", got, want)
 	}
 }
 

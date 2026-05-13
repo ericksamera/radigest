@@ -53,8 +53,9 @@ func main() {
 	sizeSD := flag.Float64("size-sd", 35, "standard deviation for -size-model normal")
 	sizeEdgeSD := flag.Float64("size-edge-sd", 25, "edge softness for -size-model soft-window")
 
-	// double-digest behavior & validation
+	// digest behavior & validation
 	allowSame := flag.Bool("allow-same", false, "double digest: also keep AA/BB neighbors (default AB/BA only)")
+	includeEnds := flag.Bool("include-ends", false, "also emit terminal fragments from chromosome/contig ends to the nearest cut")
 	strictCuts := flag.Bool("strict-cuts", false, "error if an enzyme lacks a caret and CutIndex==0 (no mid-site fallback)")
 
 	// synthetic genome flags
@@ -174,8 +175,9 @@ func main() {
 		log.Fatal(err)
 	}
 	plan := digest.NewPlanWithOptions(ens, digest.Options{
-		AllowSame:  *allowSame,
-		StrictCuts: *strictCuts,
+		AllowSame:   *allowSame,
+		StrictCuts:  *strictCuts,
+		IncludeEnds: *includeEnds,
 	})
 
 	// ---- start writers -------------------------------------------------------

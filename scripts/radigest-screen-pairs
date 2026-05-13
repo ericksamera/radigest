@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Run radigest across many enzyme pairs and write one JSON per pair.
+"""Run radigest across many enzyme pairs and write one JSON summary per pair.
 
-This script keeps radigest as the digest/scoring engine. It is intended for
-large ddRAD/GBS design screens where only JSON summaries are needed initially.
+This command keeps radigest as the digest/scoring engine. It is intended for
+large ddRAD/GBS design screens where initial ranking only needs JSON summaries.
 """
 
 from __future__ import annotations
@@ -16,6 +16,9 @@ import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
+
+
+SAFE_TAG = re.compile(r"[^A-Za-z0-9_.-]+")
 
 
 @dataclass(frozen=True)
@@ -34,9 +37,6 @@ class PairResult:
     returncode: int
     json_path: Path
     log_path: Path
-
-
-SAFE_TAG = re.compile(r"[^A-Za-z0-9_.-]+")
 
 
 def read_enzyme_names(value: str) -> list[str]:
@@ -62,9 +62,8 @@ def read_enzyme_names(value: str) -> list[str]:
     return deduped
 
 
-def pair_tag(a: str, b: str) -> str:
-    raw = f"{a}__{b}"
-    return SAFE_TAG.sub("_", raw)
+def pair_tag(enzyme_a: str, enzyme_b: str) -> str:
+    return SAFE_TAG.sub("_", f"{enzyme_a}__{enzyme_b}")
 
 
 def build_jobs(args: argparse.Namespace, enzymes: list[str]) -> list[PairJob]:
@@ -74,9 +73,8 @@ def build_jobs(args: argparse.Namespace, enzymes: list[str]) -> list[PairJob]:
     json_dir.mkdir(parents=True, exist_ok=True)
     log_dir.mkdir(parents=True, exist_ok=True)
 
-    pairs = itertools.combinations(enzymes, 2)
     jobs: list[PairJob] = []
-    for enzyme_a, enzyme_b in pairs:
+    for enzyme_a, enzyme_b in itertools.combinations(enzymes, 2):
         tag = pair_tag(enzyme_a, enzyme_b)
         json_path = json_dir / f"{tag}.json"
         log_path = log_dir / f"{tag}.log"
@@ -156,7 +154,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--radigest",
-        default="go run ./cmd/radigest",
+        default="radigest",
         help="radigest command, e.g. 'radigest' or 'go run ./cmd/radigest'",
     )
     parser.add_argument("--out-dir", type=Path, default=Path("pair_screen"))
@@ -172,7 +170,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--jobs", type=int, default=1, help="parallel radigest processes")
     parser.add_argument("--gff-sink", default="/dev/null")
     parser.add_argument("--allow-same", action="store_true")
-    parser.add_argument("--force", action="store_true", help="overwrite existing JSONs")
+    parser.add_argument("--force", action="store_true", help="overwrite existing JSON files")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--max-pairs", type=int, default=None)
     parser.add_argument(
@@ -204,7 +202,7 @@ def main() -> int:
                 failures.append(result)
 
     if failures:
-        print("failed_pairs", len(failures), file=sys.stderr)
+        print(f"failed_pairs\t{len(failures)}", file=sys.stderr)
         return 1
     return 0
 
