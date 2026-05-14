@@ -1,14 +1,16 @@
-cff-version: 1.2.0
+cff-version: 1.1.0
 message: "If you use radigest, please cite it as below."
 type: software
 title: "radigest"
 authors:
   - family-names: "Samera"
     given-names: "Gennerick J"
-version: "0.1.0"
-date-released: "2026-05-14"
+    orcid: https://orcid.org/0009-0007-4253-6718
+version: 0.1.0
+doi: 10.5281/zenodo.20176744
+date-released: 2026-05-14
 license: "MIT"
-repository-code: "https://github.com/KPU-AGC/radigest"
+repository-code: "https://github.com/ericksamera/radigest"
 abstract: "Fast in-silico restriction digest for genomics."
 keywords:
   - genomics
