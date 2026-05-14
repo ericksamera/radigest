@@ -145,7 +145,7 @@ EOF2
 Run every unique pair using an empirically calibrated size model. This example uses the sockeye ddRAD profile fitted from observed TLENs, `normal(mean=275, sd=85)`:
 
 ```bash
-python scripts/screen_pairs.py \
+scripts/radigest-screen-pairs \
   --fasta ref.fa \
   --enzymes candidate_enzymes.txt \
   --min 300 \
@@ -166,18 +166,18 @@ Rank pairs by weighted bases, or by genome percentage if a FASTA denominator is 
 
 ```bash
 # Rank by weighted recovered insert-bases
-python scripts/rank_pairs.py 'pair_screen/json/*.json' \
+scripts/radigest-rank-pairs 'pair_screen/json/*.json' \
   --objective weighted-bases \
   --out pair_screen/ranked_pairs.tsv
 
 # Rank by weighted genome percentage using non-N reference bases as denominator
-python scripts/rank_pairs.py 'pair_screen/json/*.json' \
+scripts/radigest-rank-pairs 'pair_screen/json/*.json' \
   --fasta ref.fa \
   --objective weighted-genome-pct \
   --out pair_screen/ranked_pairs.genome_pct.tsv
 
 # Find pairs closest to a target weighted genome percentage
-python scripts/rank_pairs.py 'pair_screen/json/*.json' \
+scripts/radigest-rank-pairs 'pair_screen/json/*.json' \
   --fasta ref.fa \
   --objective closest-target \
   --target-genome-pct 2.5 \

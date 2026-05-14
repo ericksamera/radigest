@@ -21,7 +21,7 @@ import (
 )
 
 var (
-	version = "v0.6.0"
+	version = "v0.1.0"
 )
 
 type digestResult struct {

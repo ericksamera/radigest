@@ -1,0 +1,18 @@
+cff-version: 1.2.0
+message: "If you use radigest, please cite it as below."
+type: software
+title: "radigest"
+authors:
+  - family-names: "Samera"
+    given-names: "Gennerick J"
+version: "0.1.0"
+date-released: "2026-05-14"
+license: "MIT"
+repository-code: "https://github.com/KPU-AGC/radigest"
+abstract: "Fast in-silico restriction digest for genomics."
+keywords:
+  - genomics
+  - restriction-digest
+  - ddRAD
+  - GBS
+  - bioinformatics
