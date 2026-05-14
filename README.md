@@ -1,6 +1,7 @@
 # radigest
 
-[![CI](https://img.shields.io/github/actions/workflow/status/KPU-AGC/radigest/ci.yml?branch=main&label=ci)](https://github.com/KPU-AGC/radigest/actions/workflows/ci.yml)
+[![CI](https://img.shields.io/github/actions/workflow/status/ericksamera/radigest/ci.yml?branch=main&label=ci)](https://github.com/ericksamera/radigest/actions/workflows/ci.yml)
+[![DOI](https://zenodo.org/badge/979818941.svg)](https://doi.org/10.5281/zenodo.20176743)
 [![Go](https://img.shields.io/badge/go-%3E=%201.22-blue)](https://golang.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 
@@ -23,9 +24,6 @@ Fast in-silico restriction digest for genomics. Give it a reference FASTA (plain
 ## Quick start
 
 ```bash
-# Install from GitHub
-go install github.com/KPU-AGC/radigest/cmd/radigest@latest
-
 # Single digest (EcoRI) → GFF file
 radigest -fasta ref.fa -enzymes EcoRI -gff fragments.gff3
 
