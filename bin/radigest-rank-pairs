@@ -1,0 +1,291 @@
+#!/usr/bin/env python3
+"""Rank radigest pair-screen JSON summaries.
+
+The command can compute raw and weighted genome percentages when a genome-size
+basis is provided. Use --fasta for an automatic denominator or --genome-bases
+when the denominator is already known.
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import glob
+import gzip
+import json
+import math
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Iterable, TextIO
+
+
+@dataclass(frozen=True)
+class GenomeBases:
+    all_bases: int
+    non_n_bases: int
+
+
+@dataclass(frozen=True)
+class RankedPair:
+    enzyme_a: str
+    enzyme_b: str
+    json_path: Path
+    raw_fragments: int
+    raw_bases: int
+    weighted_fragments: float
+    weighted_bases: float
+    mean_weighted_length: float
+    raw_genome_pct: float | None
+    weighted_genome_pct: float | None
+    target_delta_pct: float | None
+    abs_target_delta_pct: float | None
+    score: float
+
+
+def open_text(path: Path) -> TextIO:
+    if path.suffix == ".gz":
+        return gzip.open(path, "rt")
+    return path.open()
+
+
+def fasta_bases(path: Path) -> GenomeBases:
+    all_bases = 0
+    non_n_bases = 0
+    with open_text(path) as handle:
+        for line in handle:
+            if not line or line.startswith(">"):
+                continue
+            seq = line.strip().upper()
+            all_bases += len(seq)
+            non_n_bases += sum(base != "N" for base in seq)
+    if all_bases == 0:
+        raise SystemExit(f"No FASTA bases found in {path}")
+    return GenomeBases(all_bases=all_bases, non_n_bases=non_n_bases)
+
+
+def load_json_paths(patterns: Iterable[str]) -> list[Path]:
+    paths: list[Path] = []
+    for pattern in patterns:
+        matched = sorted(Path(item) for item in glob.glob(pattern))
+        if matched:
+            paths.extend(matched)
+            continue
+        path = Path(pattern)
+        if path.exists():
+            paths.append(path)
+    deduped: list[Path] = []
+    seen: set[Path] = set()
+    for path in paths:
+        resolved = path.resolve()
+        if resolved not in seen:
+            deduped.append(path)
+            seen.add(resolved)
+    if not deduped:
+        raise SystemExit("No JSON files matched.")
+    return deduped
+
+
+def as_float(value: Any) -> float:
+    if value is None:
+        return 0.0
+    return float(value)
+
+
+def as_int(value: Any) -> int:
+    if value is None:
+        return 0
+    return int(value)
+
+
+def score_pair(path: Path, genome_bases: int | None, objective: str, target_genome_pct: float | None) -> RankedPair:
+    doc = json.loads(path.read_text())
+    enzymes = doc.get("enzymes", ["", ""])
+    enzyme_a = enzymes[0] if len(enzymes) > 0 else ""
+    enzyme_b = enzymes[1] if len(enzymes) > 1 else ""
+    size = doc.get("size_selection", {})
+
+    raw_fragments = as_int(size.get("raw_fragments_in_window"))
+    raw_bases = as_int(size.get("raw_bases_in_window"))
+    weighted_fragments = as_float(size.get("weighted_fragments"))
+    weighted_bases = as_float(size.get("weighted_bases"))
+    mean_weighted_length = as_float(size.get("mean_weighted_length"))
+
+    raw_genome_pct = None
+    weighted_genome_pct = None
+    target_delta_pct = None
+    abs_target_delta_pct = None
+    if genome_bases is not None and genome_bases > 0:
+        raw_genome_pct = 100.0 * raw_bases / genome_bases
+        weighted_genome_pct = 100.0 * weighted_bases / genome_bases
+        if target_genome_pct is not None:
+            target_delta_pct = weighted_genome_pct - target_genome_pct
+            abs_target_delta_pct = abs(target_delta_pct)
+
+    score = metric_value(
+        objective=objective,
+        weighted_bases=weighted_bases,
+        weighted_fragments=weighted_fragments,
+        raw_bases=raw_bases,
+        raw_fragments=raw_fragments,
+        weighted_genome_pct=weighted_genome_pct,
+        raw_genome_pct=raw_genome_pct,
+        abs_target_delta_pct=abs_target_delta_pct,
+    )
+
+    return RankedPair(
+        enzyme_a=enzyme_a,
+        enzyme_b=enzyme_b,
+        json_path=path,
+        raw_fragments=raw_fragments,
+        raw_bases=raw_bases,
+        weighted_fragments=weighted_fragments,
+        weighted_bases=weighted_bases,
+        mean_weighted_length=mean_weighted_length,
+        raw_genome_pct=raw_genome_pct,
+        weighted_genome_pct=weighted_genome_pct,
+        target_delta_pct=target_delta_pct,
+        abs_target_delta_pct=abs_target_delta_pct,
+        score=score,
+    )
+
+
+def metric_value(
+    *,
+    objective: str,
+    weighted_bases: float,
+    weighted_fragments: float,
+    raw_bases: int,
+    raw_fragments: int,
+    weighted_genome_pct: float | None,
+    raw_genome_pct: float | None,
+    abs_target_delta_pct: float | None,
+) -> float:
+    if objective == "weighted-bases":
+        return weighted_bases
+    if objective == "weighted-fragments":
+        return weighted_fragments
+    if objective == "raw-bases":
+        return float(raw_bases)
+    if objective == "raw-fragments":
+        return float(raw_fragments)
+    if objective == "weighted-genome-pct":
+        return require_metric(weighted_genome_pct, objective)
+    if objective == "raw-genome-pct":
+        return require_metric(raw_genome_pct, objective)
+    if objective == "closest-target":
+        return -require_metric(abs_target_delta_pct, objective)
+    raise ValueError(f"unknown objective: {objective}")
+
+
+def require_metric(value: float | None, objective: str) -> float:
+    if value is None:
+        raise SystemExit(f"Objective {objective!r} requires --fasta or --genome-bases.")
+    return value
+
+
+def format_optional(value: float | None, digits: int = 6) -> str:
+    if value is None or math.isnan(value):
+        return ""
+    return f"{value:.{digits}f}"
+
+
+def write_rows(rows: list[RankedPair], out: TextIO) -> None:
+    writer = csv.writer(out, delimiter="\t", lineterminator="\n")
+    writer.writerow(
+        [
+            "rank",
+            "enzyme_a",
+            "enzyme_b",
+            "score",
+            "weighted_genome_pct",
+            "raw_genome_pct",
+            "target_delta_pct",
+            "abs_target_delta_pct",
+            "weighted_bases",
+            "weighted_fragments",
+            "raw_bases_in_window",
+            "raw_fragments_in_window",
+            "mean_weighted_length",
+            "json_path",
+        ]
+    )
+    for rank, row in enumerate(rows, start=1):
+        writer.writerow(
+            [
+                rank,
+                row.enzyme_a,
+                row.enzyme_b,
+                f"{row.score:.6f}",
+                format_optional(row.weighted_genome_pct),
+                format_optional(row.raw_genome_pct),
+                format_optional(row.target_delta_pct),
+                format_optional(row.abs_target_delta_pct),
+                f"{row.weighted_bases:.6f}",
+                f"{row.weighted_fragments:.6f}",
+                row.raw_bases,
+                row.raw_fragments,
+                f"{row.mean_weighted_length:.6f}",
+                row.json_path,
+            ]
+        )
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Rank radigest pair-screen JSON outputs.")
+    parser.add_argument("json", nargs="+", help="JSON files or glob patterns, e.g. 'pair_screen/json/*.json'")
+    denom = parser.add_mutually_exclusive_group()
+    denom.add_argument("--fasta", type=Path, help="reference FASTA for denominator")
+    denom.add_argument("--genome-bases", type=int, help="explicit genome denominator")
+    parser.add_argument(
+        "--denominator",
+        choices=("non-n", "all"),
+        default="non-n",
+        help="FASTA denominator when --fasta is used",
+    )
+    parser.add_argument(
+        "--objective",
+        choices=(
+            "weighted-genome-pct",
+            "weighted-bases",
+            "weighted-fragments",
+            "raw-genome-pct",
+            "raw-bases",
+            "raw-fragments",
+            "closest-target",
+        ),
+        default="weighted-bases",
+    )
+    parser.add_argument("--target-genome-pct", type=float, default=None)
+    parser.add_argument("--top", type=int, default=None)
+    parser.add_argument("--out", type=Path, default=None)
+    return parser.parse_args()
+
+
+def main() -> int:
+    args = parse_args()
+
+    genome_bases: int | None = args.genome_bases
+    if args.fasta is not None:
+        bases = fasta_bases(args.fasta)
+        genome_bases = bases.non_n_bases if args.denominator == "non-n" else bases.all_bases
+        print(f"genome_bases\t{genome_bases}\tdenominator\t{args.denominator}", file=sys.stderr)
+
+    if args.objective == "closest-target" and args.target_genome_pct is None:
+        raise SystemExit("--objective closest-target requires --target-genome-pct")
+
+    rows = [score_pair(path, genome_bases, args.objective, args.target_genome_pct) for path in load_json_paths(args.json)]
+    rows.sort(key=lambda row: row.score, reverse=True)
+    if args.top is not None:
+        rows = rows[: args.top]
+
+    if args.out is None:
+        write_rows(rows, sys.stdout)
+    else:
+        with args.out.open("w", newline="") as out:
+            write_rows(rows, out)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

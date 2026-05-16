@@ -54,10 +54,11 @@ func parseEnzymes(value string) ([]enzyme.Enzyme, []string, error) {
 	return ens, canonicalNames, nil
 }
 
-func validateOutputPaths(fastaPath, gffPath, fragmentsTSVPath, jsonPath string, hasFastaInput bool) error {
+func validateOutputPaths(fastaPath, gffPath, fragmentsTSVPath, fragmentsFASTAPath, jsonPath string, hasFastaInput bool) error {
 	outputs := []namedPath{
 		{name: "-gff", path: gffPath, stdoutAllowed: true},
 		{name: "-fragments-tsv", path: fragmentsTSVPath, stdoutAllowed: true},
+		{name: "-fragments-fasta", path: fragmentsFASTAPath, stdoutAllowed: true},
 		{name: "-json", path: jsonPath, stdoutAllowed: false},
 	}
 

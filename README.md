@@ -15,7 +15,7 @@ Fast in-silico restriction digest for genomics. Give it a reference FASTA (plain
 - **IUPAC & cut offsets.** Sites accept degenerate codes; the cut index comes from `^` in the site (or mid-site if missing). `-strict-cuts` makes missing carets an error.
 - **Robust FASTA I/O.** Read from a path or `-` (STDIN), auto-detect `.gz`, normalize case, and **trim CRLF**. `N` in the **reference** does **not** match any site.
 - **Synthetic genomes.** Generate a single-chromosome genome named `chr1` with `-sim-len`, `-sim-gc`, `-sim-seed` and digest it directly—no FASTA on disk needed.
-- **Clean outputs.** GFF3 with `ID=<chr>_<n>;Length=<bp>`; per-fragment TSV with insert length, hard-keep status, and size-selection weight; optional JSON summary of counts/bases per chromosome. Coordinates are **1-based closed** in GFF (internally 0-based half-open).
+- **Clean outputs.** GFF3 with `ID=<chr>_<n>;Length=<bp>`; optional fragment FASTA for the same hard-kept fragments; per-fragment TSV with insert length, hard-keep status, and size-selection weight; optional JSON summary of counts/bases per chromosome. Coordinates are **1-based closed** in GFF and **0-based half-open** in TSV/FASTA metadata.
 - **Size-selection scoring.** Keep the hard `-min/-max` window for GFF while assigning per-fragment recovery weights with `hard`, `normal`, `triangular`, or `soft-window` models over an optional broader score range.
 - **Streaming fragment export.** The CLI streams digest fragments to the collector instead of materializing every kept fragment for a chromosome before writing.
 
@@ -29,6 +29,10 @@ radigest -fasta ref.fa -enzymes EcoRI -gff fragments.gff3
 
 # Double digest with size selection + JSON summary
 radigest -fasta ref.fa -enzymes EcoRI,MseI -min 100 -max 800 -gff fragments.gff3 -json run.json
+
+# Also write FASTA sequences for the hard-kept fragments saved to GFF
+radigest -fasta ref.fa -enzymes EcoRI,MseI -min 100 -max 800 \
+  -gff fragments.gff3 -fragments-fasta fragments.fa
 
 # ddRAD-style soft-window scoring with broad per-fragment TSV for downstream modeling
 radigest -fasta ref.fa -enzymes PstI,MspI -min 250 -max 500 -score-min 1 -score-max 1000 \
@@ -55,6 +59,7 @@ radigest -sim-len 10000000 -sim-gc 0.42 -sim-seed 123 -enzymes EcoRI,MseI -gff o
 - `-size-model hard|normal|triangular|soft-window` — per-fragment size-selection weight model (**default `hard`**).
 - `-size-mean`, `-size-sd`, `-size-edge-sd` — parameters for `normal`, `triangular`, and `soft-window` scoring.
 - `-gff <path|->` — GFF3 out for hard-kept fragments; `-` = STDOUT.
+- `-fragments-fasta <path|->` — FASTA sequences for hard-kept fragments, using the same saved fragment set and ordinals as GFF; `-` = STDOUT; empty string disables (**default disabled**).
 - `-fragments-tsv <path|->` — per-fragment TSV for score-range fragments (**default `fragments.tsv`; empty string disables**).
 - `-json <path>` — write a run summary (counts, bases, per-chrom stats, and size-selection weighted stats).
 - `-threads <n>` — positive worker count; `-v`, `-version`, `-list-enzymes`.
@@ -80,6 +85,17 @@ chr1	radigest	fragment	<start>	<end>	.	+	.	ID=chr1_1;Length=123
 
 `start/end` are **1-based closed**; `Length` is `end - start + 1`. Ordering is deterministic per chromosome.
 
+### Fragment FASTA
+
+When `-fragments-fasta` is set, radigest writes FASTA records for the hard-kept fragments that are saved to GFF:
+
+```text
+>chr1_1 chrom=chr1 start0=10422 end0=10731 length=309
+AATT...
+```
+
+The fragment ID uses the same per-chromosome ordinal as GFF. Header coordinates are 0-based half-open. Use `-min 0 -max <large>` to emit every internal digest fragment that radigest would otherwise keep under the selected digest mode; terminal contig-end fragments still require `-include-ends`.
+
 ### Fragment TSV
 
 By default, radigest also writes a per-fragment TSV for fragments in the score range:
@@ -100,6 +116,7 @@ chr1	18831	18922	91	false	0.014221
   "min_length": 100,
   "max_length": 800,
   "fragments_tsv": "fragments.tsv",
+  "fragments_fasta": "fragments.fa",
   "size_selection": {
     "model": "soft-window",
     "score_min": 1,

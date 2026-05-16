@@ -15,6 +15,7 @@ import (
 	"github.com/KPU-AGC/radigest/internal/digest"
 	"github.com/KPU-AGC/radigest/internal/enzyme"
 	"github.com/KPU-AGC/radigest/internal/fasta"
+	"github.com/KPU-AGC/radigest/internal/fragmentfasta"
 	"github.com/KPU-AGC/radigest/internal/fragmenttsv"
 	"github.com/KPU-AGC/radigest/internal/sim"
 	"github.com/KPU-AGC/radigest/internal/sizeselect"
@@ -27,6 +28,7 @@ var (
 type digestResult struct {
 	idx    int
 	chr    string
+	seq    []byte
 	frags  <-chan digest.Fragment
 	errors <-chan error
 }
@@ -39,6 +41,7 @@ func main() {
 	maxLen := flag.Int("max", 1<<30, "maximum fragment length (bp) for hard-selected GFF output")
 	gffPath := flag.String("gff", "fragments.gff3", "output GFF3 file for hard-selected fragments (path or '-' for stdout)")
 	fragmentsTSVPath := flag.String("fragments-tsv", "fragments.tsv", "per-fragment TSV for score-range fragments; empty string disables")
+	fragmentsFASTAPath := flag.String("fragments-fasta", "", "FASTA output for hard-selected fragments; empty string disables")
 	jsonPath := flag.String("json", "", "optional: write run summary JSON here")
 	threads := flag.Int("threads", runtime.NumCPU(), "number of worker goroutines")
 	verbose := flag.Bool("v", false, "verbose progress to stderr")
@@ -138,7 +141,7 @@ func main() {
 		}
 	}
 
-	if err := validateOutputPaths(*fastaPath, *gffPath, *fragmentsTSVPath, *jsonPath, *fastaPath != ""); err != nil {
+	if err := validateOutputPaths(*fastaPath, *gffPath, *fragmentsTSVPath, *fragmentsFASTAPath, *jsonPath, *fastaPath != ""); err != nil {
 		log.Fatal(err)
 	}
 
@@ -189,6 +192,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("fragments tsv: %v", err)
 	}
+	fragFASTAWriter, err := fragmentfasta.New(*fragmentsFASTAPath)
+	if err != nil {
+		log.Fatalf("fragments fasta: %v", err)
+	}
+	wantFragmentFASTA := strings.TrimSpace(*fragmentsFASTAPath) != ""
 
 	// ---- worker pool --------------------------------------------------------
 	type job struct {
@@ -205,7 +213,11 @@ func main() {
 			for j := range jobs {
 				fragCh := make(chan digest.Fragment, 64)
 				errCh := make(chan error, 1)
-				results <- digestResult{idx: j.idx, chr: j.rec.ID, frags: fragCh, errors: errCh}
+				var seq []byte
+				if wantFragmentFASTA {
+					seq = j.rec.Seq
+				}
+				results <- digestResult{idx: j.idx, chr: j.rec.ID, seq: seq, frags: fragCh, errors: errCh}
 
 				err := plan.DigestEach(j.rec.Seq, digestMin, digestMax, func(fr digest.Fragment) error {
 					fragCh <- fr
@@ -245,9 +257,10 @@ func main() {
 	}()
 
 	// ---- wait + finalize ----------------------------------------------------
-	sizeStats, streamErr := writeResultStreamsScored(writer, fragWriter, selector, results, *verbose)
+	sizeStats, streamErr := writeResultStreamsScored(writer, fragWriter, fragFASTAWriter, selector, results, *verbose)
 	stats, closeErr := writer.Close()
 	fragCloseErr := fragWriter.Close()
+	fragFASTACloseErr := fragFASTAWriter.Close()
 	if streamErr != nil {
 		log.Fatalf("digest/write: %v", streamErr)
 	}
@@ -257,24 +270,29 @@ func main() {
 	if fragCloseErr != nil {
 		log.Fatalf("fragments tsv: %v", fragCloseErr)
 	}
+	if fragFASTACloseErr != nil {
+		log.Fatalf("fragments fasta: %v", fragFASTACloseErr)
+	}
 
 	fmt.Fprintf(os.Stderr, "Fragments kept: %d\nBases covered: %d\nChromosomes: %d\n",
 		stats.TotalFragments, stats.TotalBases, len(stats.PerChr))
 	if *jsonPath != "" {
 		out := struct {
-			Enzymes       []string         `json:"enzymes"`
-			MinLength     int              `json:"min_length"`
-			MaxLength     int              `json:"max_length"`
-			FragmentsTSV  string           `json:"fragments_tsv,omitempty"`
-			SizeSelection sizeselect.Stats `json:"size_selection"`
+			Enzymes        []string         `json:"enzymes"`
+			MinLength      int              `json:"min_length"`
+			MaxLength      int              `json:"max_length"`
+			FragmentsTSV   string           `json:"fragments_tsv,omitempty"`
+			FragmentsFASTA string           `json:"fragments_fasta,omitempty"`
+			SizeSelection  sizeselect.Stats `json:"size_selection"`
 			collector.Stats
 		}{
-			Enzymes:       enzymeNames,
-			MinLength:     *minLen,
-			MaxLength:     *maxLen,
-			FragmentsTSV:  *fragmentsTSVPath,
-			SizeSelection: sizeStats,
-			Stats:         stats,
+			Enzymes:        enzymeNames,
+			MinLength:      *minLen,
+			MaxLength:      *maxLen,
+			FragmentsTSV:   *fragmentsTSVPath,
+			FragmentsFASTA: *fragmentsFASTAPath,
+			SizeSelection:  sizeStats,
+			Stats:          stats,
 		}
 		f, err := os.Create(*jsonPath)
 		if err != nil {
@@ -323,14 +341,14 @@ func writeResultStreams(w *collector.Writer, results <-chan digestResult, verbos
 	return nil
 }
 
-func writeResultStreamsScored(w *collector.Writer, tsv *fragmenttsv.Writer, selector sizeselect.Selector, results <-chan digestResult, verbose bool) (sizeselect.Stats, error) {
+func writeResultStreamsScored(w *collector.Writer, tsv *fragmenttsv.Writer, fastaWriter *fragmentfasta.Writer, selector sizeselect.Selector, results <-chan digestResult, verbose bool) (sizeselect.Stats, error) {
 	pending := make(map[int]digestResult)
 	next := 0
 	stats := sizeselect.NewStats(selector)
 
 	for results != nil || len(pending) > 0 {
 		if r, ok := pending[next]; ok {
-			cs, writeErr := writeScoredChromosome(w, tsv, selector, &stats, r.chr, r.frags)
+			cs, writeErr := writeScoredChromosome(w, tsv, fastaWriter, selector, &stats, r.chr, r.seq, r.frags)
 			digestErr := <-r.errors
 			delete(pending, next)
 			next++
@@ -360,7 +378,7 @@ func writeResultStreamsScored(w *collector.Writer, tsv *fragmenttsv.Writer, sele
 	return stats, nil
 }
 
-func writeScoredChromosome(w *collector.Writer, tsv *fragmenttsv.Writer, selector sizeselect.Selector, stats *sizeselect.Stats, chr string, frags <-chan digest.Fragment) (collector.ChrStats, error) {
+func writeScoredChromosome(w *collector.Writer, tsv *fragmenttsv.Writer, fastaWriter *fragmentfasta.Writer, selector sizeselect.Selector, stats *sizeselect.Stats, chr string, seq []byte, frags <-chan digest.Fragment) (collector.ChrStats, error) {
 	var local collector.ChrStats
 	var firstErr error
 	ordinal := 1
@@ -383,6 +401,8 @@ func writeScoredChromosome(w *collector.Writer, tsv *fragmenttsv.Writer, selecto
 		if hardKept {
 			if firstErr == nil {
 				if err := w.WriteFragment(chr, ordinal, fr); err != nil {
+					firstErr = err
+				} else if err := fastaWriter.Write(chr, ordinal, fr, seq); err != nil {
 					firstErr = err
 				} else {
 					local.Fragments++
