@@ -101,8 +101,11 @@ func (e usageError) Unwrap() error {
 
 func main() {
 	if err := run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr); err != nil {
-		fmt.Fprintln(os.Stderr, "error:", err)
-		os.Exit(exitCode(err))
+		code := exitCode(err)
+		if _, writeErr := fmt.Fprintln(os.Stderr, "error:", err); writeErr != nil {
+			os.Exit(1)
+		}
+		os.Exit(code)
 	}
 }
 
@@ -194,7 +197,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		fmt.Fprintln(b, "  radigest -fasta ref.fa -enzymes PstI,MspI -min 250 -max 500 -score-min 1 -score-max 1000 -size-model soft-window -size-edge-sd 25 -fragments-tsv fragments.tsv -json run.json")
 		fmt.Fprintln(b, "  # Simulate a 10 Mb genome at 42% GC and digest (chromosome name is always chr1)")
 		fmt.Fprintln(b, "  radigest -sim-len 10000000 -sim-gc 0.42 -enzymes EcoRI,MseI -gff out.gff3")
-		fmt.Fprint(stderr, b.String())
+		if _, err := fmt.Fprint(stderr, b.String()); err != nil {
+			return
+		}
 	}
 
 	if err := fs.Parse(args); err != nil {
@@ -213,7 +218,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	}
 
 	if *showVer {
-		fmt.Fprintf(stdout, "radigest %s\n", version)
+		if _, err := fmt.Fprintf(stdout, "radigest %s\n", version); err != nil {
+			return fmt.Errorf("write version: %w", err)
+		}
 		return nil
 	}
 	if *listEns {
@@ -223,7 +230,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		}
 		sort.Strings(names)
 		for _, n := range names {
-			fmt.Fprintln(stdout, n)
+			if _, err := fmt.Fprintln(stdout, n); err != nil {
+				return fmt.Errorf("write enzyme list: %w", err)
+			}
 		}
 		return nil
 	}
@@ -397,8 +406,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return fmt.Errorf("fragments fasta: %w", fragFASTACloseErr)
 	}
 
-	fmt.Fprintf(stderr, "Fragments kept: %d\nBases covered: %d\nChromosomes: %d\n",
-		stats.TotalFragments, stats.TotalBases, len(stats.PerChr))
+	if _, err := fmt.Fprintf(stderr, "Fragments kept: %d\nBases covered: %d\nChromosomes: %d\n",
+		stats.TotalFragments, stats.TotalBases, len(stats.PerChr)); err != nil {
+		return fmt.Errorf("write final stats: %w", err)
+	}
 	if jsonOutputPath != "" {
 		summary := buildRunSummary(runSummaryInput{
 			Args:               args,
@@ -445,7 +456,9 @@ func writeResultStreamsTo(w *collector.Writer, results <-chan digestResult, verb
 			next++
 
 			if verbose {
-				fmt.Fprintf(stderr, "chr=%s fragments=%d\n", r.chr, cs.Fragments)
+				if _, err := fmt.Fprintf(stderr, "chr=%s fragments=%d\n", r.chr, cs.Fragments); err != nil {
+					return fmt.Errorf("write progress for %s: %w", r.chr, err)
+				}
 			}
 			if writeErr != nil {
 				return fmt.Errorf("write fragments for %s: %w", r.chr, writeErr)
@@ -469,10 +482,6 @@ func writeResultStreamsTo(w *collector.Writer, results <-chan digestResult, verb
 	return nil
 }
 
-func writeResultStreamsScored(w *collector.Writer, tsv *fragmenttsv.Writer, fastaWriter *fragmentfasta.Writer, selector sizeselect.Selector, results <-chan digestResult, verbose bool) (sizeselect.Stats, error) {
-	return writeResultStreamsScoredTo(w, tsv, fastaWriter, selector, results, verbose, os.Stderr)
-}
-
 func writeResultStreamsScoredTo(w *collector.Writer, tsv *fragmenttsv.Writer, fastaWriter *fragmentfasta.Writer, selector sizeselect.Selector, results <-chan digestResult, verbose bool, stderr io.Writer) (sizeselect.Stats, error) {
 	pending := make(map[int]digestResult)
 	next := 0
@@ -486,7 +495,9 @@ func writeResultStreamsScoredTo(w *collector.Writer, tsv *fragmenttsv.Writer, fa
 			next++
 
 			if verbose {
-				fmt.Fprintf(stderr, "chr=%s fragments=%d scored=%d\n", r.chr, cs.Fragments, stats.RawFragmentsScored)
+				if _, err := fmt.Fprintf(stderr, "chr=%s fragments=%d scored=%d\n", r.chr, cs.Fragments, stats.RawFragmentsScored); err != nil {
+					return stats, fmt.Errorf("write progress for %s: %w", r.chr, err)
+				}
 			}
 			if writeErr != nil {
 				return stats, fmt.Errorf("write fragments for %s: %w", r.chr, writeErr)
@@ -663,10 +674,6 @@ func anyFlagSet(fs *flag.FlagSet, names ...string) bool {
 
 func normalizeOutputPath(path string) string {
 	return strings.TrimSpace(path)
-}
-
-func writeSummaryJSON(path string, summary runSummary) error {
-	return writeSummaryJSONTo(path, summary, os.Stdout)
 }
 
 func writeSummaryJSONTo(path string, summary runSummary, stdout io.Writer) error {
