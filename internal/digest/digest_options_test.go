@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/KPU-AGC/radigest/internal/enzyme"
+	"github.com/ericksamera/radigest/internal/enzyme"
 )
 
 func TestAllowSame_EnablesAAFragments(t *testing.T) {

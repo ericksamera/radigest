@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/KPU-AGC/radigest/internal/digest"
+	"github.com/ericksamera/radigest/internal/digest"
 )
 
 func TestCollector_OutOfOrderIdxWritesInOrder(t *testing.T) {

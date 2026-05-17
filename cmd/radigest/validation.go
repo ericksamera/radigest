@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/KPU-AGC/radigest/internal/enzyme"
+	"github.com/ericksamera/radigest/internal/enzyme"
 )
 
 func validatePositiveThreads(n int) error {

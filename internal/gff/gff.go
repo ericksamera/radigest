@@ -6,7 +6,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/KPU-AGC/radigest/internal/digest"
+	"github.com/ericksamera/radigest/internal/digest"
 )
 
 // WriteFile writes one chromosome worth of fragments to `path`.

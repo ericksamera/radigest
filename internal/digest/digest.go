@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/KPU-AGC/radigest/internal/enzyme"
+	"github.com/ericksamera/radigest/internal/enzyme"
 )
 
 // Fragment is half-open, 0-based [Start, End).

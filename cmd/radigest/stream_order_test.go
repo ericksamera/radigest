@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/KPU-AGC/radigest/internal/collector"
-	"github.com/KPU-AGC/radigest/internal/digest"
+	"github.com/ericksamera/radigest/internal/collector"
+	"github.com/ericksamera/radigest/internal/digest"
 )
 
 func result(idx int, chr string, frags ...digest.Fragment) digestResult {

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/KPU-AGC/radigest/internal/digest"
+	"github.com/ericksamera/radigest/internal/digest"
 )
 
 // Writer emits per-fragment TSV rows for downstream modeling. A Writer created

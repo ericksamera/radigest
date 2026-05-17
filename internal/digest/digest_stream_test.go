@@ -5,7 +5,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/KPU-AGC/radigest/internal/enzyme"
+	"github.com/ericksamera/radigest/internal/enzyme"
 )
 
 func collectDigestEach(t *testing.T, p Plan, seq []byte, min, max int) []Fragment {

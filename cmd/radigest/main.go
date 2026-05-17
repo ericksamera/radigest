@@ -11,14 +11,14 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/KPU-AGC/radigest/internal/collector"
-	"github.com/KPU-AGC/radigest/internal/digest"
-	"github.com/KPU-AGC/radigest/internal/enzyme"
-	"github.com/KPU-AGC/radigest/internal/fasta"
-	"github.com/KPU-AGC/radigest/internal/fragmentfasta"
-	"github.com/KPU-AGC/radigest/internal/fragmenttsv"
-	"github.com/KPU-AGC/radigest/internal/sim"
-	"github.com/KPU-AGC/radigest/internal/sizeselect"
+	"github.com/ericksamera/radigest/internal/collector"
+	"github.com/ericksamera/radigest/internal/digest"
+	"github.com/ericksamera/radigest/internal/enzyme"
+	"github.com/ericksamera/radigest/internal/fasta"
+	"github.com/ericksamera/radigest/internal/fragmentfasta"
+	"github.com/ericksamera/radigest/internal/fragmenttsv"
+	"github.com/ericksamera/radigest/internal/sim"
+	"github.com/ericksamera/radigest/internal/sizeselect"
 )
 
 var (

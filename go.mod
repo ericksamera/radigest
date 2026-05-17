@@ -1,3 +1,3 @@
-module github.com/KPU-AGC/radigest
+module github.com/ericksamera/radigest
 
 go 1.22
