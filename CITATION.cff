@@ -6,9 +6,9 @@ authors:
   - family-names: "Samera"
     given-names: "Gennerick J"
     orcid: https://orcid.org/0009-0007-4253-6718
-version: 0.1.0
+version: 0.2.0
 doi: 10.5281/zenodo.20176744
-date-released: 2026-05-14
+date-released: 2026-05-17
 license: "MIT"
 repository-code: "https://github.com/ericksamera/radigest"
 abstract: "Fast in-silico restriction digest for genomics."
