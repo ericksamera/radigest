@@ -3,6 +3,7 @@ package fragmenttsv
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/ericksamera/radigest/internal/digest"
@@ -12,35 +13,42 @@ import (
 // with an empty path is a no-op, which lets callers keep TSV output disabled
 // without nil checks.
 type Writer struct {
-	f         *os.File
-	bw        *bufio.Writer
-	closeFile bool
-	disabled  bool
+	bw       *bufio.Writer
+	close    func() error
+	disabled bool
 }
 
 // New opens path and writes the TSV header. Use an empty path to disable TSV
 // output. Use "-" to write to stdout.
 func New(path string) (*Writer, error) {
+	return NewTo(path, os.Stdout)
+}
+
+// NewTo is like New, but writes "-" to stdout instead of os.Stdout.
+func NewTo(path string, stdout io.Writer) (*Writer, error) {
 	if path == "" {
 		return &Writer{disabled: true}, nil
 	}
 
-	var f *os.File
-	closeFile := false
+	var sink io.Writer
+	var close func() error
 	if path == "-" {
-		f = os.Stdout
+		if stdout == nil {
+			return nil, fmt.Errorf("stdout writer is nil")
+		}
+		sink = stdout
 	} else {
-		var err error
-		f, err = os.Create(path)
+		f, err := os.Create(path)
 		if err != nil {
 			return nil, err
 		}
-		closeFile = true
+		sink = f
+		close = f.Close
 	}
-	w := &Writer{f: f, bw: bufio.NewWriter(f), closeFile: closeFile}
+	w := &Writer{bw: bufio.NewWriter(sink), close: close}
 	if _, err := w.bw.WriteString("chrom\tstart0\tend0\tlength\thard_kept\tsize_weight\n"); err != nil {
-		if closeFile {
-			_ = f.Close()
+		if close != nil {
+			_ = close()
 		}
 		return nil, err
 	}
@@ -64,8 +72,8 @@ func (w *Writer) Close() error {
 		return nil
 	}
 	err := w.bw.Flush()
-	if w.closeFile {
-		if closeErr := w.f.Close(); err == nil {
+	if w.close != nil {
+		if closeErr := w.close(); err == nil {
 			err = closeErr
 		}
 	}

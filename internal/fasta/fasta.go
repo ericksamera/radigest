@@ -19,12 +19,17 @@ type Record struct {
 // Stream reads path (file path or "-" for STDIN) and sends each record.
 // It always closes out before returning, including when it returns an error.
 func Stream(path string, out chan<- Record) (err error) {
+	return StreamFrom(path, os.Stdin, out)
+}
+
+// StreamFrom is like Stream, but reads "-" from stdin instead of os.Stdin.
+func StreamFrom(path string, stdin io.Reader, out chan<- Record) (err error) {
 	if out == nil {
 		return fmt.Errorf("fasta stream: output channel is nil")
 	}
 	defer close(out)
 
-	src, cleanup, err := openSource(path)
+	src, cleanup, err := openSource(path, stdin)
 	if err != nil {
 		return err
 	}
@@ -83,9 +88,12 @@ func Stream(path string, out chan<- Record) (err error) {
 	}
 }
 
-func openSource(path string) (io.Reader, func() error, error) {
+func openSource(path string, stdin io.Reader) (io.Reader, func() error, error) {
 	if path == "-" {
-		br := bufio.NewReader(os.Stdin)
+		if stdin == nil {
+			return nil, nil, fmt.Errorf("stdin reader is nil")
+		}
+		br := bufio.NewReader(stdin)
 		if isGzip(br) {
 			gz, err := gzip.NewReader(br)
 			if err != nil {

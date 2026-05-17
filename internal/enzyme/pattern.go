@@ -12,6 +12,10 @@ func StripCaret(recog string) (string, int) {
 }
 
 // CompileMask converts an IUPAC string to per-position bit-masks.
+//
+// CompileMask preserves the historical unchecked behavior: unknown symbols are
+// converted to zero masks. Use CompileMaskChecked for user- or database-facing
+// validation.
 func CompileMask(site string) []uint8 {
 	b := []byte(site)
 	m := make([]uint8, len(b))
@@ -22,6 +26,12 @@ func CompileMask(site string) []uint8 {
 		m[i] = codeMap[c]
 	}
 	return m
+}
+
+// CompileMaskChecked converts an IUPAC string to per-position bit-masks and
+// rejects unknown symbols instead of silently producing zero masks.
+func CompileMaskChecked(site string) ([]uint8, error) {
+	return CompilePattern(site)
 }
 
 // baseMaskWin maps a reference base to its mask for matching.

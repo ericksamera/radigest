@@ -3,7 +3,9 @@ package collector
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"os"
+	"strings"
 
 	"github.com/ericksamera/radigest/internal/digest"
 	"github.com/ericksamera/radigest/internal/gff"
@@ -27,55 +29,73 @@ type Stats struct {
 	PerChr         map[string]ChrStats `json:"per_chromosome"`
 }
 
-// Writer serializes fragments to GFF3 and accumulates run statistics.
+// Writer optionally serializes fragments to GFF3 and accumulates run statistics.
+// A Writer created with an empty path is stats-only and writes no GFF output.
 type Writer struct {
-	f         *os.File
-	bw        *bufio.Writer
-	closeFile bool
-	stats     Stats
+	bw       *bufio.Writer
+	close    func() error
+	disabled bool
+	stats    Stats
 }
 
 // NewWriter opens gffPath, writes the GFF3 header, and returns a streaming
-// writer. Use Close to flush and, when appropriate, close the underlying file.
+// writer. Use an empty path for stats-only mode with GFF output disabled. Use
+// Close to flush and, when appropriate, close the underlying file.
 func NewWriter(gffPath string) (*Writer, error) {
-	var f *os.File
-	closeFile := false
+	return NewWriterTo(gffPath, os.Stdout)
+}
+
+// NewWriterTo is like NewWriter, but writes "-" to stdout instead of os.Stdout.
+func NewWriterTo(gffPath string, stdout io.Writer) (*Writer, error) {
+	if strings.TrimSpace(gffPath) == "" {
+		return &Writer{disabled: true, stats: Stats{PerChr: make(map[string]ChrStats)}}, nil
+	}
+
+	var sink io.Writer
+	var close func() error
 	if gffPath == "-" {
-		f = os.Stdout
+		if stdout == nil {
+			return nil, fmt.Errorf("stdout writer is nil")
+		}
+		sink = stdout
 	} else {
-		var err error
-		f, err = os.Create(gffPath)
+		f, err := os.Create(gffPath)
 		if err != nil {
 			return nil, err
 		}
-		closeFile = true
+		sink = f
+		close = f.Close
 	}
 
 	w := &Writer{
-		f:         f,
-		bw:        bufio.NewWriter(f),
-		closeFile: closeFile,
-		stats:     Stats{PerChr: make(map[string]ChrStats)},
+		bw:    bufio.NewWriter(sink),
+		close: close,
+		stats: Stats{PerChr: make(map[string]ChrStats)},
 	}
 	if _, err := w.bw.WriteString("##gff-version 3\n"); err != nil {
-		if closeFile {
-			_ = f.Close()
+		if close != nil {
+			_ = close()
 		}
 		return nil, err
 	}
 	return w, nil
 }
 
-// WriteFragment writes one GFF3 fragment using the caller-provided per-chromosome
-// ordinal for the generated feature ID.
+// WriteFragment records one hard-kept fragment and, when GFF output is enabled,
+// writes one GFF3 feature using the caller-provided per-chromosome ordinal.
 func (w *Writer) WriteFragment(chr string, ordinal int, fr digest.Fragment) error {
+	if w == nil {
+		return nil
+	}
 	start := fr.Start + 1 // 1-based closed for GFF
 	end := fr.End
 	ln := end - fr.Start
-	if _, err := fmt.Fprintf(w.bw,
-		"%s\tradigest\tfragment\t%d\t%d\t.\t+\t.\t%s\n",
-		gff.EscapeSeqID(chr), start, end, gff.FragmentAttributes(chr, ordinal, ln)); err != nil {
-		return err
+	if !w.disabled {
+		if _, err := fmt.Fprintf(w.bw,
+			"%s\tradigest\tfragment\t%d\t%d\t.\t+\t.\t%s\n",
+			gff.EscapeSeqID(chr), start, end, gff.FragmentAttributes(chr, ordinal, ln)); err != nil {
+			return err
+		}
 	}
 	w.stats.TotalFragments++
 	w.stats.TotalBases += ln
@@ -119,11 +139,18 @@ func (w *Writer) WriteStream(chr string, frags <-chan digest.Fragment) (ChrStats
 }
 
 // Close flushes pending output, closes owned files, and returns accumulated
-// statistics. Stdout is flushed but not closed.
+// statistics. Stdout is flushed but not closed. Disabled writers are no-ops
+// except for returning accumulated statistics.
 func (w *Writer) Close() (Stats, error) {
+	if w == nil {
+		return Stats{}, nil
+	}
+	if w.disabled {
+		return w.stats, nil
+	}
 	err := w.bw.Flush()
-	if w.closeFile {
-		if closeErr := w.f.Close(); err == nil {
+	if w.close != nil {
+		if closeErr := w.close(); err == nil {
 			err = closeErr
 		}
 	}

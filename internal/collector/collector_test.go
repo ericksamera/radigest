@@ -73,3 +73,20 @@ func TestWriterEscapesGFF3Fields(t *testing.T) {
 		t.Fatalf("attributes were not escaped: %q", got)
 	}
 }
+
+func TestDisabledWriterAccumulatesStatsWithoutGFF(t *testing.T) {
+	w, err := NewWriter("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.WriteFragment("chr1", 1, digest.Fragment{Start: 10, End: 25}); err != nil {
+		t.Fatal(err)
+	}
+	stats, err := w.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.TotalFragments != 1 || stats.TotalBases != 15 || stats.PerChr["chr1"].Fragments != 1 {
+		t.Fatalf("stats wrong: %+v", stats)
+	}
+}

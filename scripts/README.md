@@ -15,7 +15,8 @@ radigest-fit-size-model --help
 ### `radigest-screen-pairs`
 
 Runs `radigest` for all unique enzyme pairs from a candidate list and writes one
-JSON summary per pair.
+JSON summary per pair. GFF, TSV, and FASTA artifact outputs are not requested
+during screening.
 
 ```bash
 radigest-screen-pairs \

@@ -105,10 +105,6 @@ def build_jobs(args: argparse.Namespace, enzymes: list[str]) -> list[PairJob]:
             str(args.size_edge_sd),
             "-threads",
             str(args.radigest_threads),
-            "-fragments-tsv",
-            "",
-            "-gff",
-            args.gff_sink,
             "-json",
             str(json_path),
         ]
@@ -168,7 +164,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--size-edge-sd", type=float, default=25.0)
     parser.add_argument("--radigest-threads", type=int, default=1)
     parser.add_argument("--jobs", type=int, default=1, help="parallel radigest processes")
-    parser.add_argument("--gff-sink", default="/dev/null")
     parser.add_argument("--allow-same", action="store_true")
     parser.add_argument("--force", action="store_true", help="overwrite existing JSON files")
     parser.add_argument("--dry-run", action="store_true")

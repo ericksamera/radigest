@@ -32,6 +32,14 @@ type Plan struct {
 }
 
 func NewPlanWithOptions(ens []enzyme.Enzyme, opt Options) Plan {
+	p, err := TryNewPlanWithOptions(ens, opt)
+	if err != nil {
+		panic(err)
+	}
+	return p
+}
+
+func TryNewPlanWithOptions(ens []enzyme.Enzyme, opt Options) (Plan, error) {
 	var p Plan
 	p.allowSame = opt.AllowSame
 	p.includeEnds = opt.IncludeEnds
@@ -52,12 +60,22 @@ func NewPlanWithOptions(ens []enzyme.Enzyme, opt Options) Plan {
 			usedFallback = true
 			offset = len(site) / 2
 		}
-		if opt.StrictCuts && usedFallback {
-			panic(fmt.Sprintf("enzyme %s: no caret and CutIndex==0 (mid-site fallback disabled by -strict-cuts)", e.Name))
+		if site == "" {
+			return Plan{}, fmt.Errorf("enzyme %s: empty recognition site", e.Name)
 		}
-		p.m[i] = matcher{mask: enzyme.CompileMask(site), offset: offset}
+		if offset < 0 || offset > len(site) {
+			return Plan{}, fmt.Errorf("enzyme %s: cut offset %d outside recognition site length %d", e.Name, offset, len(site))
+		}
+		if opt.StrictCuts && usedFallback {
+			return Plan{}, fmt.Errorf("enzyme %s: no caret and CutIndex==0 (mid-site fallback disabled by -strict-cuts)", e.Name)
+		}
+		mask, err := enzyme.CompileMaskChecked(site)
+		if err != nil {
+			return Plan{}, fmt.Errorf("enzyme %s recognition %q: %w", e.Name, e.Recognition, err)
+		}
+		p.m[i] = matcher{mask: mask, offset: offset}
 	}
-	return p
+	return p, nil
 }
 
 // Back-compat.

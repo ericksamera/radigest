@@ -3,11 +3,13 @@ package main
 import (
 	"bytes"
 	"encoding/json"
-	"flag"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ericksamera/radigest/internal/enzyme"
 )
 
 func TestSimFlags_RunWritesGFFJSONAndFragmentsTSV(t *testing.T) {
@@ -16,10 +18,8 @@ func TestSimFlags_RunWritesGFFJSONAndFragmentsTSV(t *testing.T) {
 	jsPath := filepath.Join(dir, "run.json")
 	tsvPath := filepath.Join(dir, "fragments.tsv")
 
-	// Fresh FlagSet so main() can define flags
-	flag.CommandLine = flag.NewFlagSet("radigest", flag.ExitOnError)
-	os.Args = []string{
-		"radigest",
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{
 		"-sim-len", "10000",
 		"-sim-gc", "0.50",
 		"-sim-seed", "42",
@@ -28,8 +28,9 @@ func TestSimFlags_RunWritesGFFJSONAndFragmentsTSV(t *testing.T) {
 		"-fragments-tsv", tsvPath,
 		"-json", jsPath,
 		"-threads", "1",
+	}, strings.NewReader(""), &stdout, &stderr); err != nil {
+		t.Fatalf("run returned error: %v\nstderr:\n%s", err, stderr.String())
 	}
-	main()
 
 	// GFF exists and has header
 	gff, err := os.ReadFile(gffPath)
@@ -70,5 +71,39 @@ func TestSimFlags_RunWritesGFFJSONAndFragmentsTSV(t *testing.T) {
 	}
 	if doc.Size.Model != "hard" {
 		t.Fatalf("json size model wrong: %q", doc.Size.Model)
+	}
+}
+
+func TestRunRejectsInvalidEnzymeMetadataAsUsageError(t *testing.T) {
+	old, existed := enzyme.DB["BadMeta"]
+	enzyme.DB["BadMeta"] = enzyme.Enzyme{Name: "BadMeta", Recognition: "A^X", CutIndex: 1}
+	defer func() {
+		if existed {
+			enzyme.DB["BadMeta"] = old
+		} else {
+			delete(enzyme.DB, "BadMeta")
+		}
+	}()
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"-sim-len", "1000",
+		"-sim-gc", "0.50",
+		"-sim-seed", "42",
+		"-enzymes", "BadMeta",
+		"-threads", "1",
+	}, strings.NewReader(""), &stdout, &stderr)
+	if err == nil {
+		t.Fatalf("run returned nil error for invalid enzyme metadata")
+	}
+	var usage usageError
+	if !errors.As(err, &usage) {
+		t.Fatalf("expected usageError, got %T: %v", err, err)
+	}
+	if exitCode(err) != 2 {
+		t.Fatalf("expected exit code 2, got %d", exitCode(err))
+	}
+	if !strings.Contains(err.Error(), "invalid IUPAC") {
+		t.Fatalf("expected invalid IUPAC error, got %v", err)
 	}
 }

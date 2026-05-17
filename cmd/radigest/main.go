@@ -2,9 +2,10 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
-	"log"
+	"io"
 	"os"
 	"runtime"
 	"sort"
@@ -25,6 +26,8 @@ var (
 	version = "v0.1.0"
 )
 
+const summarySchemaVersion = 1
+
 type digestResult struct {
 	idx    int
 	chr    string
@@ -33,46 +36,137 @@ type digestResult struct {
 	errors <-chan error
 }
 
+type runSummary struct {
+	SchemaVersion   int              `json:"schema_version"`
+	RadigestVersion string           `json:"radigest_version"`
+	Command         []string         `json:"command"`
+	Input           inputSummary     `json:"input"`
+	Parameters      parameterSummary `json:"parameters"`
+	Outputs         outputSummary    `json:"outputs"`
+	Warnings        []string         `json:"warnings"`
+
+	// Backward-compatible top-level fields retained for existing downstream tools.
+	Enzymes        []string         `json:"enzymes"`
+	MinLength      int              `json:"min_length"`
+	MaxLength      int              `json:"max_length"`
+	GFF            string           `json:"gff,omitempty"`
+	FragmentsTSV   string           `json:"fragments_tsv,omitempty"`
+	FragmentsFASTA string           `json:"fragments_fasta,omitempty"`
+	SizeSelection  sizeselect.Stats `json:"size_selection"`
+	collector.Stats
+}
+
+type inputSummary struct {
+	Source           string   `json:"source"`
+	FASTA            string   `json:"fasta,omitempty"`
+	SimLength        int      `json:"sim_length,omitempty"`
+	SimGC            *float64 `json:"sim_gc,omitempty"`
+	SimSeedRequested *int64   `json:"sim_seed_requested,omitempty"`
+	SimSeedResolved  *int64   `json:"sim_seed_resolved,omitempty"`
+}
+
+type parameterSummary struct {
+	MinLength   int     `json:"min_length"`
+	MaxLength   int     `json:"max_length"`
+	ScoreMin    int     `json:"score_min"`
+	ScoreMax    int     `json:"score_max"`
+	SizeModel   string  `json:"size_model"`
+	SizeMean    float64 `json:"size_mean,omitempty"`
+	SizeSD      float64 `json:"size_sd,omitempty"`
+	SizeEdgeSD  float64 `json:"size_edge_sd,omitempty"`
+	Threads     int     `json:"threads"`
+	AllowSame   bool    `json:"allow_same"`
+	StrictCuts  bool    `json:"strict_cuts"`
+	IncludeEnds bool    `json:"include_ends"`
+}
+
+type outputSummary struct {
+	JSON           string `json:"json,omitempty"`
+	GFF            string `json:"gff,omitempty"`
+	FragmentsTSV   string `json:"fragments_tsv,omitempty"`
+	FragmentsFASTA string `json:"fragments_fasta,omitempty"`
+}
+
+type usageError struct {
+	err error
+}
+
+func (e usageError) Error() string {
+	return e.err.Error()
+}
+
+func (e usageError) Unwrap() error {
+	return e.err
+}
+
 func main() {
+	if err := run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr); err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		os.Exit(exitCode(err))
+	}
+}
+
+func exitCode(err error) int {
+	var usage usageError
+	if errors.As(err, &usage) {
+		return 2
+	}
+	return 1
+}
+
+func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
+	if stdin == nil {
+		stdin = strings.NewReader("")
+	}
+	if stdout == nil {
+		stdout = io.Discard
+	}
+	if stderr == nil {
+		stderr = io.Discard
+	}
+
+	fs := flag.NewFlagSet("radigest", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+
 	// ---- CLI flags ----------------------------------------------------------
-	fastaPath := flag.String("fasta", "", "reference FASTA file")
-	enzFlag := flag.String("enzymes", "", "comma-separated enzyme names (one or two; two form the AB pair)")
-	minLen := flag.Int("min", 1, "minimum fragment length (bp) for hard-selected GFF output")
-	maxLen := flag.Int("max", 1<<30, "maximum fragment length (bp) for hard-selected GFF output")
-	gffPath := flag.String("gff", "fragments.gff3", "output GFF3 file for hard-selected fragments (path or '-' for stdout)")
-	fragmentsTSVPath := flag.String("fragments-tsv", "fragments.tsv", "per-fragment TSV for score-range fragments; empty string disables")
-	fragmentsFASTAPath := flag.String("fragments-fasta", "", "FASTA output for hard-selected fragments; empty string disables")
-	jsonPath := flag.String("json", "", "optional: write run summary JSON here")
-	threads := flag.Int("threads", runtime.NumCPU(), "number of worker goroutines")
-	verbose := flag.Bool("v", false, "verbose progress to stderr")
-	showVer := flag.Bool("version", false, "print version and exit")
-	listEns := flag.Bool("list-enzymes", false, "list available enzyme names and exit")
+	fastaPath := fs.String("fasta", "", "reference FASTA file")
+	enzFlag := fs.String("enzymes", "", "comma-separated enzyme names (one or two; two form the AB pair)")
+	minLen := fs.Int("min", 1, "minimum fragment length (bp) for hard-selected outputs")
+	maxLen := fs.Int("max", 1<<30, "maximum fragment length (bp) for hard-selected outputs")
+	gffPath := fs.String("gff", "", "optional GFF3 output for hard-selected fragments (path or '-' for stdout); empty string disables")
+	fragmentsTSVPath := fs.String("fragments-tsv", "", "optional per-fragment TSV for score-range fragments (path or '-' for stdout); empty string disables")
+	fragmentsFASTAPath := fs.String("fragments-fasta", "", "optional FASTA output for hard-selected fragments (path or '-' for stdout); empty string disables")
+	jsonPath := fs.String("json", "", "optional run summary JSON output (path or '-' for stdout); if no output flags are set, JSON is written to stdout")
+	threads := fs.Int("threads", runtime.NumCPU(), "number of worker goroutines")
+	verbose := fs.Bool("v", false, "verbose progress to stderr")
+	showVer := fs.Bool("version", false, "print version and exit")
+	listEns := fs.Bool("list-enzymes", false, "list available enzyme names and exit")
 
 	// size-selection scoring
-	scoreMinFlag := flag.Int("score-min", -1, "minimum fragment length included in fragments TSV and size-selection stats; default -min")
-	scoreMaxFlag := flag.Int("score-max", -1, "maximum fragment length included in fragments TSV and size-selection stats; default -max")
-	sizeModel := flag.String("size-model", "hard", "size-selection model: hard, normal, triangular, or soft-window")
-	sizeMean := flag.Float64("size-mean", 0, "target/peak insert length for normal/triangular models; default midpoint of -min/-max")
-	sizeSD := flag.Float64("size-sd", 35, "standard deviation for -size-model normal")
-	sizeEdgeSD := flag.Float64("size-edge-sd", 25, "edge softness for -size-model soft-window")
+	scoreMinFlag := fs.Int("score-min", -1, "minimum fragment length included in fragments TSV and size-selection stats; default -min")
+	scoreMaxFlag := fs.Int("score-max", -1, "maximum fragment length included in fragments TSV and size-selection stats; default -max")
+	sizeModel := fs.String("size-model", "hard", "size-selection model: hard, normal, triangular, or soft-window")
+	sizeMean := fs.Float64("size-mean", 0, "target/peak insert length for normal/triangular models; default midpoint of -min/-max")
+	sizeSD := fs.Float64("size-sd", 35, "standard deviation for -size-model normal")
+	sizeEdgeSD := fs.Float64("size-edge-sd", 25, "edge softness for -size-model soft-window")
 
 	// digest behavior & validation
-	allowSame := flag.Bool("allow-same", false, "double digest: also keep AA/BB neighbors (default AB/BA only)")
-	includeEnds := flag.Bool("include-ends", false, "also emit terminal fragments from chromosome/contig ends to the nearest cut")
-	strictCuts := flag.Bool("strict-cuts", false, "error if an enzyme lacks a caret and CutIndex==0 (no mid-site fallback)")
+	allowSame := fs.Bool("allow-same", false, "double digest: also keep AA/BB neighbors (default AB/BA only)")
+	includeEnds := fs.Bool("include-ends", false, "also emit terminal fragments from chromosome/contig ends to the nearest cut")
+	strictCuts := fs.Bool("strict-cuts", false, "error if an enzyme lacks a caret and CutIndex==0 (no mid-site fallback)")
 
 	// synthetic genome flags
-	simLen := flag.Int("sim-len", 0, "synthesize a single-chromosome genome of this length (bp) instead of reading -fasta")
-	simGC := flag.Float64("sim-gc", 0.50, "target GC fraction in [0,1] for -sim-len")
-	simSeed := flag.Int64("sim-seed", 1, "PRNG seed for -sim-len (0 ⇒ time-based)")
+	simLen := fs.Int("sim-len", 0, "synthesize a single-chromosome genome of this length (bp) instead of reading -fasta")
+	simGC := fs.Float64("sim-gc", 0.50, "target GC fraction in [0,1] for -sim-len")
+	simSeed := fs.Int64("sim-seed", 1, "PRNG seed for -sim-len (0 ⇒ time-based)")
 
-	flag.Usage = func() {
+	fs.Usage = func() {
 		b := &strings.Builder{}
 		fmt.Fprintln(b, "Author:  Erick Samera (erick.samera@kpu.ca)")
 		fmt.Fprintln(b, "License: MIT")
 		fmt.Fprintln(b, "Version:", version)
 		fmt.Fprintln(b)
-		fmt.Fprintln(b, "radigest — in-silico single/double digest and GFF3/TSV fragment export")
+		fmt.Fprintln(b, "radigest — in-silico single/double digest with JSON summaries and optional fragment exports")
 		fmt.Fprintln(b)
 		fmt.Fprintln(b, "Usage:")
 		fmt.Fprintln(b, "  radigest -fasta <ref.fa|-> -enzymes <E1[,E2]> [options]")
@@ -82,29 +176,45 @@ func main() {
 		fmt.Fprintln(b, "  -enzymes, and exactly one of -fasta or -sim-len")
 		fmt.Fprintln(b)
 		fmt.Fprintln(b, "Options:")
-		flag.CommandLine.SetOutput(b)
-		flag.PrintDefaults()
-		flag.CommandLine.SetOutput(os.Stderr)
+		oldOutput := fs.Output()
+		fs.SetOutput(b)
+		fs.PrintDefaults()
+		fs.SetOutput(oldOutput)
 		fmt.Fprintln(b)
 		fmt.Fprintln(b, "Examples:")
+		fmt.Fprintln(b, "  # Default: write run summary JSON to stdout")
+		fmt.Fprintln(b, "  radigest -fasta ref.fa -enzymes EcoRI,MseI")
 		fmt.Fprintln(b, "  # Pipe FASTA in and write GFF to stdout")
 		fmt.Fprintln(b, "  zcat ref.fa.gz | radigest -fasta - -enzymes EcoRI,MseI -gff - | bgzip > frag.gff3.gz")
-		fmt.Fprintln(b, "  # Single digest (EcoRI) to file")
+		fmt.Fprintln(b, "  # Single digest (EcoRI) to GFF file")
 		fmt.Fprintln(b, "  radigest -fasta ref.fa -enzymes EcoRI -gff out.gff3")
-		fmt.Fprintln(b, "  # Double digest with hard size selection + JSON summary")
+		fmt.Fprintln(b, "  # Double digest with hard size selection + JSON summary file")
 		fmt.Fprintln(b, "  radigest -fasta ref.fa -enzymes EcoRI,MseI -min 100 -max 800 -json run.json")
 		fmt.Fprintln(b, "  # Double digest with soft-window scoring and broad per-fragment TSV")
 		fmt.Fprintln(b, "  radigest -fasta ref.fa -enzymes PstI,MspI -min 250 -max 500 -score-min 1 -score-max 1000 -size-model soft-window -size-edge-sd 25 -fragments-tsv fragments.tsv -json run.json")
 		fmt.Fprintln(b, "  # Simulate a 10 Mb genome at 42% GC and digest (chromosome name is always chr1)")
 		fmt.Fprintln(b, "  radigest -sim-len 10000000 -sim-gc 0.42 -enzymes EcoRI,MseI -gff out.gff3")
-		fmt.Fprint(os.Stderr, b.String())
+		fmt.Fprint(stderr, b.String())
 	}
 
-	flag.Parse()
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return usageError{err: err}
+	}
+
+	gffOutputPath := normalizeOutputPath(*gffPath)
+	fragmentsTSVOutputPath := normalizeOutputPath(*fragmentsTSVPath)
+	fragmentsFASTAOutputPath := normalizeOutputPath(*fragmentsFASTAPath)
+	jsonOutputPath := normalizeOutputPath(*jsonPath)
+	if !anyFlagSet(fs, "gff", "fragments-tsv", "fragments-fasta", "json") {
+		jsonOutputPath = "-"
+	}
 
 	if *showVer {
-		fmt.Printf("radigest %s\n", version)
-		return
+		fmt.Fprintf(stdout, "radigest %s\n", version)
+		return nil
 	}
 	if *listEns {
 		names := make([]string, 0, len(enzyme.DB))
@@ -113,36 +223,37 @@ func main() {
 		}
 		sort.Strings(names)
 		for _, n := range names {
-			fmt.Println(n)
+			fmt.Fprintln(stdout, n)
 		}
-		return
+		return nil
 	}
 
 	// ---- validation ---------------------------------------------------------
 	if *enzFlag == "" {
-		fmt.Fprintln(os.Stderr, "error: -enzymes is required")
-		flag.Usage()
-		os.Exit(2)
+		fs.Usage()
+		return usageError{err: errors.New("-enzymes is required")}
 	}
 	if (*fastaPath == "" && *simLen <= 0) || (*fastaPath != "" && *simLen > 0) {
-		fmt.Fprintln(os.Stderr, "error: use exactly one of -fasta or -sim-len")
-		flag.Usage()
-		os.Exit(2)
+		fs.Usage()
+		return usageError{err: errors.New("use exactly one of -fasta or -sim-len")}
 	}
 	if err := validatePositiveThreads(*threads); err != nil {
-		log.Fatal(err)
+		return err
 	}
 	if *minLen > *maxLen {
-		log.Fatalf("invalid range: -min (%d) > -max (%d)", *minLen, *maxLen)
+		return fmt.Errorf("invalid range: -min (%d) > -max (%d)", *minLen, *maxLen)
 	}
 	if *simLen > 0 {
 		if err := validateSimGC(*simGC); err != nil {
-			log.Fatal(err)
+			return err
 		}
 	}
 
-	if err := validateOutputPaths(*fastaPath, *gffPath, *fragmentsTSVPath, *fragmentsFASTAPath, *jsonPath, *fastaPath != ""); err != nil {
-		log.Fatal(err)
+	if err := validateOutputSelection(gffOutputPath, fragmentsTSVOutputPath, fragmentsFASTAOutputPath, jsonOutputPath); err != nil {
+		return err
+	}
+	if err := validateOutputPaths(*fastaPath, gffOutputPath, fragmentsTSVOutputPath, fragmentsFASTAOutputPath, jsonOutputPath, *fastaPath != ""); err != nil {
+		return err
 	}
 
 	scoreMin := *scoreMinFlag
@@ -164,39 +275,42 @@ func main() {
 		EdgeSD:   *sizeEdgeSD,
 	})
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 
-	// Digest the union of the hard GFF window and the broader scoring window.
-	// The writer decides which fragments go to GFF and which go to TSV/stats.
+	// Digest the union of the hard output window and the broader scoring window.
+	// Optional writers decide which fragments are serialized to artifact outputs.
 	digestMin := minInt(*minLen, scoreMin)
 	digestMax := maxInt(*maxLen, scoreMax)
 
 	// ---- compile enzymes ----------------------------------------------------
 	ens, enzymeNames, err := parseEnzymes(*enzFlag)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
-	plan := digest.NewPlanWithOptions(ens, digest.Options{
+	plan, err := digest.TryNewPlanWithOptions(ens, digest.Options{
 		AllowSame:   *allowSame,
 		StrictCuts:  *strictCuts,
 		IncludeEnds: *includeEnds,
 	})
+	if err != nil {
+		return usageError{err: err}
+	}
 
 	// ---- start writers -------------------------------------------------------
-	writer, err := collector.NewWriter(*gffPath)
+	writer, err := collector.NewWriterTo(gffOutputPath, stdout)
 	if err != nil {
-		log.Fatalf("collector: %v", err)
+		return fmt.Errorf("collector: %w", err)
 	}
-	fragWriter, err := fragmenttsv.New(*fragmentsTSVPath)
+	fragWriter, err := fragmenttsv.NewTo(fragmentsTSVOutputPath, stdout)
 	if err != nil {
-		log.Fatalf("fragments tsv: %v", err)
+		return fmt.Errorf("fragments tsv: %w", err)
 	}
-	fragFASTAWriter, err := fragmentfasta.New(*fragmentsFASTAPath)
+	fragFASTAWriter, err := fragmentfasta.NewTo(fragmentsFASTAOutputPath, stdout)
 	if err != nil {
-		log.Fatalf("fragments fasta: %v", err)
+		return fmt.Errorf("fragments fasta: %w", err)
 	}
-	wantFragmentFASTA := strings.TrimSpace(*fragmentsFASTAPath) != ""
+	wantFragmentFASTA := fragmentsFASTAOutputPath != ""
 
 	// ---- worker pool --------------------------------------------------------
 	type job struct {
@@ -235,17 +349,22 @@ func main() {
 	}()
 
 	// ---- source: FASTA or synthetic ----------------------------------------
+	resolvedSimSeed := int64(0)
+	if *simLen > 0 {
+		resolvedSimSeed = sim.ResolveSeed(*simSeed)
+	}
+
 	faCh := make(chan fasta.Record)
+	sourceErrCh := make(chan error, 1)
 	go func() {
 		if *simLen > 0 {
-			seq := sim.Make(*simLen, *simGC, *simSeed) // chr1
+			seq := sim.Make(*simLen, *simGC, resolvedSimSeed) // chr1
 			faCh <- fasta.Record{ID: "chr1", Seq: seq}
 			close(faCh)
+			sourceErrCh <- nil
 			return
 		}
-		if err := fasta.Stream(*fastaPath, faCh); err != nil {
-			log.Fatalf("fasta stream: %v", err)
-		}
+		sourceErrCh <- fasta.StreamFrom(*fastaPath, stdin, faCh)
 	}()
 	go func() {
 		idx := 0
@@ -257,55 +376,64 @@ func main() {
 	}()
 
 	// ---- wait + finalize ----------------------------------------------------
-	sizeStats, streamErr := writeResultStreamsScored(writer, fragWriter, fragFASTAWriter, selector, results, *verbose)
+	sizeStats, streamErr := writeResultStreamsScoredTo(writer, fragWriter, fragFASTAWriter, selector, results, *verbose, stderr)
 	stats, closeErr := writer.Close()
 	fragCloseErr := fragWriter.Close()
 	fragFASTACloseErr := fragFASTAWriter.Close()
 	if streamErr != nil {
-		log.Fatalf("digest/write: %v", streamErr)
+		return fmt.Errorf("digest/write: %w", streamErr)
+	}
+	sourceErr := <-sourceErrCh
+	if sourceErr != nil {
+		return fmt.Errorf("fasta stream: %w", sourceErr)
 	}
 	if closeErr != nil {
-		log.Fatalf("collector: %v", closeErr)
+		return fmt.Errorf("collector: %w", closeErr)
 	}
 	if fragCloseErr != nil {
-		log.Fatalf("fragments tsv: %v", fragCloseErr)
+		return fmt.Errorf("fragments tsv: %w", fragCloseErr)
 	}
 	if fragFASTACloseErr != nil {
-		log.Fatalf("fragments fasta: %v", fragFASTACloseErr)
+		return fmt.Errorf("fragments fasta: %w", fragFASTACloseErr)
 	}
 
-	fmt.Fprintf(os.Stderr, "Fragments kept: %d\nBases covered: %d\nChromosomes: %d\n",
+	fmt.Fprintf(stderr, "Fragments kept: %d\nBases covered: %d\nChromosomes: %d\n",
 		stats.TotalFragments, stats.TotalBases, len(stats.PerChr))
-	if *jsonPath != "" {
-		out := struct {
-			Enzymes        []string         `json:"enzymes"`
-			MinLength      int              `json:"min_length"`
-			MaxLength      int              `json:"max_length"`
-			FragmentsTSV   string           `json:"fragments_tsv,omitempty"`
-			FragmentsFASTA string           `json:"fragments_fasta,omitempty"`
-			SizeSelection  sizeselect.Stats `json:"size_selection"`
-			collector.Stats
-		}{
-			Enzymes:        enzymeNames,
-			MinLength:      *minLen,
-			MaxLength:      *maxLen,
-			FragmentsTSV:   *fragmentsTSVPath,
-			FragmentsFASTA: *fragmentsFASTAPath,
-			SizeSelection:  sizeStats,
-			Stats:          stats,
+	if jsonOutputPath != "" {
+		summary := buildRunSummary(runSummaryInput{
+			Args:               args,
+			Enzymes:            enzymeNames,
+			FastaPath:          *fastaPath,
+			SimLen:             *simLen,
+			SimGC:              *simGC,
+			SimSeedRequested:   *simSeed,
+			SimSeedResolved:    resolvedSimSeed,
+			MinLen:             *minLen,
+			MaxLen:             *maxLen,
+			Threads:            *threads,
+			AllowSame:          *allowSame,
+			StrictCuts:         *strictCuts,
+			IncludeEnds:        *includeEnds,
+			SelectorConfig:     selector.Config(),
+			JSONPath:           jsonOutputPath,
+			GFFPath:            gffOutputPath,
+			FragmentsTSVPath:   fragmentsTSVOutputPath,
+			FragmentsFASTAPath: fragmentsFASTAOutputPath,
+			SizeSelection:      sizeStats,
+			Stats:              stats,
+		})
+		if err := writeSummaryJSONTo(jsonOutputPath, summary, stdout); err != nil {
+			return fmt.Errorf("write json: %w", err)
 		}
-		f, err := os.Create(*jsonPath)
-		if err != nil {
-			log.Fatalf("write json: %v", err)
-		}
-		if err := json.NewEncoder(f).Encode(out); err != nil {
-			log.Fatalf("encode json: %v", err)
-		}
-		_ = f.Close()
 	}
+	return nil
 }
 
 func writeResultStreams(w *collector.Writer, results <-chan digestResult, verbose bool) error {
+	return writeResultStreamsTo(w, results, verbose, os.Stderr)
+}
+
+func writeResultStreamsTo(w *collector.Writer, results <-chan digestResult, verbose bool, stderr io.Writer) error {
 	pending := make(map[int]digestResult)
 	next := 0
 
@@ -317,7 +445,7 @@ func writeResultStreams(w *collector.Writer, results <-chan digestResult, verbos
 			next++
 
 			if verbose {
-				fmt.Fprintf(os.Stderr, "chr=%s fragments=%d\n", r.chr, cs.Fragments)
+				fmt.Fprintf(stderr, "chr=%s fragments=%d\n", r.chr, cs.Fragments)
 			}
 			if writeErr != nil {
 				return fmt.Errorf("write fragments for %s: %w", r.chr, writeErr)
@@ -342,6 +470,10 @@ func writeResultStreams(w *collector.Writer, results <-chan digestResult, verbos
 }
 
 func writeResultStreamsScored(w *collector.Writer, tsv *fragmenttsv.Writer, fastaWriter *fragmentfasta.Writer, selector sizeselect.Selector, results <-chan digestResult, verbose bool) (sizeselect.Stats, error) {
+	return writeResultStreamsScoredTo(w, tsv, fastaWriter, selector, results, verbose, os.Stderr)
+}
+
+func writeResultStreamsScoredTo(w *collector.Writer, tsv *fragmenttsv.Writer, fastaWriter *fragmentfasta.Writer, selector sizeselect.Selector, results <-chan digestResult, verbose bool, stderr io.Writer) (sizeselect.Stats, error) {
 	pending := make(map[int]digestResult)
 	next := 0
 	stats := sizeselect.NewStats(selector)
@@ -354,7 +486,7 @@ func writeResultStreamsScored(w *collector.Writer, tsv *fragmenttsv.Writer, fast
 			next++
 
 			if verbose {
-				fmt.Fprintf(os.Stderr, "chr=%s fragments=%d scored=%d\n", r.chr, cs.Fragments, stats.RawFragmentsScored)
+				fmt.Fprintf(stderr, "chr=%s fragments=%d scored=%d\n", r.chr, cs.Fragments, stats.RawFragmentsScored)
 			}
 			if writeErr != nil {
 				return stats, fmt.Errorf("write fragments for %s: %w", r.chr, writeErr)
@@ -413,6 +545,147 @@ func writeScoredChromosome(w *collector.Writer, tsv *fragmenttsv.Writer, fastaWr
 		}
 	}
 	return local, firstErr
+}
+
+type runSummaryInput struct {
+	Args               []string
+	Enzymes            []string
+	FastaPath          string
+	SimLen             int
+	SimGC              float64
+	SimSeedRequested   int64
+	SimSeedResolved    int64
+	MinLen             int
+	MaxLen             int
+	Threads            int
+	AllowSame          bool
+	StrictCuts         bool
+	IncludeEnds        bool
+	SelectorConfig     sizeselect.Config
+	JSONPath           string
+	GFFPath            string
+	FragmentsTSVPath   string
+	FragmentsFASTAPath string
+	SizeSelection      sizeselect.Stats
+	Stats              collector.Stats
+}
+
+func buildRunSummary(in runSummaryInput) runSummary {
+	params := parameterSummary{
+		MinLength:   in.MinLen,
+		MaxLength:   in.MaxLen,
+		ScoreMin:    in.SelectorConfig.ScoreMin,
+		ScoreMax:    in.SelectorConfig.ScoreMax,
+		SizeModel:   string(in.SelectorConfig.Model),
+		Threads:     in.Threads,
+		AllowSame:   in.AllowSame,
+		StrictCuts:  in.StrictCuts,
+		IncludeEnds: in.IncludeEnds,
+	}
+	switch in.SelectorConfig.Model {
+	case sizeselect.ModelNormal:
+		params.SizeMean = in.SelectorConfig.Mean
+		params.SizeSD = in.SelectorConfig.SD
+	case sizeselect.ModelTriangular:
+		params.SizeMean = in.SelectorConfig.Mean
+	case sizeselect.ModelSoftWindow:
+		params.SizeEdgeSD = in.SelectorConfig.EdgeSD
+	}
+
+	input := inputSummary{
+		Source: "fasta",
+		FASTA:  in.FastaPath,
+	}
+	warnings := []string{}
+	if in.SimLen > 0 {
+		simGC := in.SimGC
+		simSeedRequested := in.SimSeedRequested
+		simSeedResolved := in.SimSeedResolved
+		input = inputSummary{
+			Source:           "simulation",
+			SimLength:        in.SimLen,
+			SimGC:            &simGC,
+			SimSeedRequested: &simSeedRequested,
+			SimSeedResolved:  &simSeedResolved,
+		}
+		if in.SimSeedRequested == 0 {
+			warnings = append(warnings, "-sim-seed 0 requested a time-based seed; resolved seed is recorded in input.sim_seed_resolved")
+		}
+	}
+	if in.Stats.TotalFragments == 0 {
+		warnings = append(warnings, "no fragments passed the hard size-selection window")
+	}
+
+	command := make([]string, 0, len(in.Args)+1)
+	command = append(command, "radigest")
+	command = append(command, in.Args...)
+
+	outputs := outputSummary{
+		JSON:           in.JSONPath,
+		GFF:            in.GFFPath,
+		FragmentsTSV:   in.FragmentsTSVPath,
+		FragmentsFASTA: in.FragmentsFASTAPath,
+	}
+
+	return runSummary{
+		SchemaVersion:   summarySchemaVersion,
+		RadigestVersion: version,
+		Command:         command,
+		Input:           input,
+		Parameters:      params,
+		Outputs:         outputs,
+		Warnings:        warnings,
+
+		Enzymes:        in.Enzymes,
+		MinLength:      in.MinLen,
+		MaxLength:      in.MaxLen,
+		GFF:            in.GFFPath,
+		FragmentsTSV:   in.FragmentsTSVPath,
+		FragmentsFASTA: in.FragmentsFASTAPath,
+		SizeSelection:  in.SizeSelection,
+		Stats:          in.Stats,
+	}
+}
+
+func anyFlagSet(fs *flag.FlagSet, names ...string) bool {
+	wanted := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		wanted[name] = struct{}{}
+	}
+	found := false
+	fs.Visit(func(f *flag.Flag) {
+		if _, ok := wanted[f.Name]; ok {
+			found = true
+		}
+	})
+	return found
+}
+
+func normalizeOutputPath(path string) string {
+	return strings.TrimSpace(path)
+}
+
+func writeSummaryJSON(path string, summary runSummary) error {
+	return writeSummaryJSONTo(path, summary, os.Stdout)
+}
+
+func writeSummaryJSONTo(path string, summary runSummary, stdout io.Writer) error {
+	if path == "" {
+		return nil
+	}
+	if path == "-" {
+		return json.NewEncoder(stdout).Encode(summary)
+	}
+
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	if err := json.NewEncoder(f).Encode(summary); err != nil {
+		_ = f.Close()
+		return err
+	}
+	return f.Close()
 }
 
 func minInt(a, b int) int {

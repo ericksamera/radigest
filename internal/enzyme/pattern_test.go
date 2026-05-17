@@ -32,3 +32,9 @@ func TestMatchMask_SequenceNDoesNotMatch(t *testing.T) {
 		t.Fatal("sequence 'N' must not match any site base")
 	}
 }
+
+func TestCompileMaskCheckedRejectsInvalidIUPAC(t *testing.T) {
+	if _, err := CompileMaskChecked("AX"); err == nil {
+		t.Fatalf("CompileMaskChecked returned nil error for invalid IUPAC symbol")
+	}
+}

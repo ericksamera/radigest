@@ -58,6 +58,15 @@ func TestParseEnzymesRejectsInvalidInputs(t *testing.T) {
 	}
 }
 
+func TestValidateOutputSelection(t *testing.T) {
+	if err := validateOutputSelection("", "", "", "-"); err != nil {
+		t.Fatalf("json stdout should satisfy output selection: %v", err)
+	}
+	if err := validateOutputSelection("", "", "", ""); err == nil {
+		t.Fatalf("expected all disabled outputs to be rejected")
+	}
+}
+
 func TestValidateOutputPathsRejectsCollisions(t *testing.T) {
 	if err := validateOutputPaths("ref.fa", "ref.fa", "fragments.tsv", "fragments.fa", "run.json", true); err == nil {
 		t.Fatalf("expected -gff/-fasta path collision to be rejected")
@@ -77,11 +86,17 @@ func TestValidateOutputPathsRejectsCollisions(t *testing.T) {
 	if err := validateOutputPaths("ref.fa", "-", "-", "fragments.fa", "run.json", true); err == nil {
 		t.Fatalf("expected two stdout outputs to be rejected")
 	}
+	if err := validateOutputPaths("ref.fa", "-", "", "fragments.fa", "-", true); err == nil {
+		t.Fatalf("expected -gff stdout and -json stdout collision to be rejected")
+	}
 }
 
 func TestValidateOutputPathsAllowsDisabledOutputsAndStdout(t *testing.T) {
 	if err := validateOutputPaths("-", "-", "", "", "", true); err != nil {
 		t.Fatalf("stdout/disabled outputs should be allowed: %v", err)
+	}
+	if err := validateOutputPaths("ref.fa", "", "", "", "-", true); err != nil {
+		t.Fatalf("json stdout should be allowed: %v", err)
 	}
 	if err := validateOutputPaths("", "/dev/null", "", "", "", false); err != nil {
 		t.Fatalf("/dev/null should be allowed as a sink: %v", err)

@@ -2,6 +2,7 @@ package digest
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/ericksamera/radigest/internal/enzyme"
@@ -56,12 +57,30 @@ func TestIncludeEnds_EnablesTerminalFragmentsDoubleDigest(t *testing.T) {
 	}
 }
 
-func TestStrictCuts_PanicsOnFallback(t *testing.T) {
-	defer func() {
-		if r := recover(); r == nil {
-			t.Fatalf("StrictCuts should panic when fallback would be used")
-		}
-	}()
+func TestTryNewPlanWithOptions_StrictCutsReturnsErrorOnFallback(t *testing.T) {
 	fake := enzyme.Enzyme{Name: "Fake", Recognition: "AAAA", CutIndex: 0} // no caret, CutIndex==0
-	_ = NewPlanWithOptions([]enzyme.Enzyme{fake}, Options{StrictCuts: true})
+	if _, err := TryNewPlanWithOptions([]enzyme.Enzyme{fake}, Options{StrictCuts: true}); err == nil {
+		t.Fatalf("StrictCuts should return an error when fallback would be used")
+	}
+}
+
+func TestTryNewPlanWithOptions_RejectsInvalidIUPAC(t *testing.T) {
+	fake := enzyme.Enzyme{Name: "Bad", Recognition: "A^X", CutIndex: 1}
+	_, err := TryNewPlanWithOptions([]enzyme.Enzyme{fake}, Options{})
+	if err == nil {
+		t.Fatalf("TryNewPlanWithOptions returned nil error for invalid IUPAC symbol")
+	}
+	if !strings.Contains(err.Error(), "invalid IUPAC") {
+		t.Fatalf("expected invalid IUPAC error, got %v", err)
+	}
+}
+
+func TestTryNewPlanWithOptions_ValidEnzymesCompile(t *testing.T) {
+	plan, err := TryNewPlanWithOptions([]enzyme.Enzyme{enzyme.DB["EcoRI"], enzyme.DB["MseI"]}, Options{})
+	if err != nil {
+		t.Fatalf("TryNewPlanWithOptions returned error for valid enzymes: %v", err)
+	}
+	if got := plan.Digest([]byte(toyChr), 1, 1<<30); len(got) == 0 {
+		t.Fatalf("valid plan produced no fragments")
+	}
 }

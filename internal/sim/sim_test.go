@@ -45,6 +45,15 @@ func TestMake_SeedDeterministic(t *testing.T) {
 	}
 }
 
+func TestResolveSeed(t *testing.T) {
+	if seed := ResolveSeed(42); seed != 42 {
+		t.Fatalf("resolved seed: got %d want 42", seed)
+	}
+	if seed := ResolveSeed(0); seed == 0 {
+		t.Fatalf("time-based seed resolved to 0")
+	}
+}
+
 func TestMake_GCExtremesAndClamp(t *testing.T) {
 	at := Make(1000, 0, 7)
 	for _, x := range at {

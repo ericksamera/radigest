@@ -5,7 +5,17 @@ import (
 	"time"
 )
 
-// Make returns an upper‑case DNA sequence of given length with ~gc fraction GC.
+// ResolveSeed returns the actual PRNG seed used for simulation. A requested
+// seed of 0 is expanded to a time-based seed; all other seeds are returned
+// unchanged.
+func ResolveSeed(seed int64) int64 {
+	if seed == 0 {
+		return time.Now().UnixNano()
+	}
+	return seed
+}
+
+// Make returns an upper-case DNA sequence of given length with ~gc fraction GC.
 // If seed==0 we use a time-based seed; otherwise results are reproducible.
 func Make(length int, gc float64, seed int64) []byte {
 	if length <= 0 {
@@ -17,9 +27,7 @@ func Make(length int, gc float64, seed int64) []byte {
 	if gc > 1 {
 		gc = 1
 	}
-	if seed == 0 {
-		seed = time.Now().UnixNano()
-	}
+	seed = ResolveSeed(seed)
 	r := rand.New(rand.NewSource(seed))
 
 	gcCount := int(float64(length)*gc + 0.5) // nearest integer

@@ -54,12 +54,21 @@ func parseEnzymes(value string) ([]enzyme.Enzyme, []string, error) {
 	return ens, canonicalNames, nil
 }
 
+func validateOutputSelection(gffPath, fragmentsTSVPath, fragmentsFASTAPath, jsonPath string) error {
+	for _, path := range []string{gffPath, fragmentsTSVPath, fragmentsFASTAPath, jsonPath} {
+		if activeOutputPath(path) {
+			return nil
+		}
+	}
+	return fmt.Errorf("no outputs enabled; omit output flags to write JSON summary to stdout, or set -json, -gff, -fragments-tsv, or -fragments-fasta")
+}
+
 func validateOutputPaths(fastaPath, gffPath, fragmentsTSVPath, fragmentsFASTAPath, jsonPath string, hasFastaInput bool) error {
 	outputs := []namedPath{
 		{name: "-gff", path: gffPath, stdoutAllowed: true},
 		{name: "-fragments-tsv", path: fragmentsTSVPath, stdoutAllowed: true},
 		{name: "-fragments-fasta", path: fragmentsFASTAPath, stdoutAllowed: true},
-		{name: "-json", path: jsonPath, stdoutAllowed: false},
+		{name: "-json", path: jsonPath, stdoutAllowed: true},
 	}
 
 	if hasFastaInput && activeFilePath(fastaPath) {

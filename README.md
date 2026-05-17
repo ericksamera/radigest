@@ -5,7 +5,7 @@
 [![Go](https://img.shields.io/badge/go-%3E=%201.22-blue)](https://golang.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 
-Fast in-silico restriction digest for genomics. Give it a reference FASTA (plain or `.gz`) or synthesize one on the fly; pass one or two enzymes; it scans, size-selects, and exports fragments as GFF3 for GBS/ddRAD, probe design, or visualization. Output order is deterministic even with multithreading.
+Fast in-silico restriction digest for genomics. Give it a reference FASTA (plain or `.gz`) or synthesize one on the fly; pass one or two enzymes; it scans, size-selects, and reports a JSON run summary by default. Optional GFF3, TSV, and FASTA fragment exports are available for GBS/ddRAD, probe design, visualization, and downstream modeling. Output order is deterministic even with multithreading.
 
 ---
 
@@ -15,8 +15,8 @@ Fast in-silico restriction digest for genomics. Give it a reference FASTA (plain
 - **IUPAC & cut offsets.** Sites accept degenerate codes; the cut index comes from `^` in the site (or mid-site if missing). `-strict-cuts` makes missing carets an error.
 - **Robust FASTA I/O.** Read from a path or `-` (STDIN), auto-detect `.gz`, normalize case, and **trim CRLF**. `N` in the **reference** does **not** match any site.
 - **Synthetic genomes.** Generate a single-chromosome genome named `chr1` with `-sim-len`, `-sim-gc`, `-sim-seed` and digest it directly—no FASTA on disk needed.
-- **Clean outputs.** GFF3 with `ID=<chr>_<n>;Length=<bp>`; optional fragment FASTA for the same hard-kept fragments; per-fragment TSV with insert length, hard-keep status, and size-selection weight; optional JSON summary of counts/bases per chromosome. Coordinates are **1-based closed** in GFF and **0-based half-open** in TSV/FASTA metadata.
-- **Size-selection scoring.** Keep the hard `-min/-max` window for GFF while assigning per-fragment recovery weights with `hard`, `normal`, `triangular`, or `soft-window` models over an optional broader score range.
+- **Clean outputs.** With no output flags, radigest writes a JSON summary to STDOUT. GFF3, fragment FASTA, and per-fragment TSV are opt-in artifact outputs. GFF3 uses `ID=<chr>_<n>;Length=<bp>`; TSV records insert length, hard-keep status, and size-selection weight. Coordinates are **1-based closed** in GFF and **0-based half-open** in TSV/FASTA metadata.
+- **Size-selection scoring.** Keep the hard `-min/-max` window for hard-kept outputs while assigning per-fragment recovery weights with `hard`, `normal`, `triangular`, or `soft-window` models over an optional broader score range.
 - **Streaming fragment export.** The CLI streams digest fragments to the collector instead of materializing every kept fragment for a chromosome before writing.
 
 ---
@@ -24,13 +24,16 @@ Fast in-silico restriction digest for genomics. Give it a reference FASTA (plain
 ## Quick start
 
 ```bash
+# Default: write a run summary JSON document to stdout
+radigest -fasta ref.fa -enzymes EcoRI,MseI
+
 # Single digest (EcoRI) → GFF file
 radigest -fasta ref.fa -enzymes EcoRI -gff fragments.gff3
 
-# Double digest with size selection + JSON summary
-radigest -fasta ref.fa -enzymes EcoRI,MseI -min 100 -max 800 -gff fragments.gff3 -json run.json
+# Double digest with size selection + JSON summary file
+radigest -fasta ref.fa -enzymes EcoRI,MseI -min 100 -max 800 -json run.json
 
-# Also write FASTA sequences for the hard-kept fragments saved to GFF
+# Also write FASTA sequences for the hard-kept fragments
 radigest -fasta ref.fa -enzymes EcoRI,MseI -min 100 -max 800 \
   -gff fragments.gff3 -fragments-fasta fragments.fa
 
@@ -44,8 +47,8 @@ radigest -fasta ref.fa -enzymes EcoRI,MseI -allow-same -gff fragments.gff3
 # Include terminal fragments from chromosome/contig ends to the nearest cut
 radigest -fasta ref.fa -enzymes EcoRI,MseI -include-ends -gff fragments.gff3
 
-# Simulate a 10 Mb genome at 42% GC and digest
-radigest -sim-len 10000000 -sim-gc 0.42 -sim-seed 123 -enzymes EcoRI,MseI -gff out.gff3
+# Simulate a 10 Mb genome at 42% GC and digest, reporting JSON to stdout
+radigest -sim-len 10000000 -sim-gc 0.42 -sim-seed 123 -enzymes EcoRI,MseI
 ```
 
 ---
@@ -54,14 +57,14 @@ radigest -sim-len 10000000 -sim-gc 0.42 -sim-seed 123 -enzymes EcoRI,MseI -gff o
 
 - `-fasta <path|->` — reference FASTA; `-` = STDIN; `.gz` auto-detected.
 - `-enzymes E1[,E2]` — one (A) or two (A,B) only. In double-digest, AB/BA by default.
-- `-min/-max` — hard-selected insert-length window used for GFF output and `hard_kept` in TSV (**default min=1**).
-- `-score-min/-score-max` — broader insert-length range emitted to `-fragments-tsv` and used for weighted size-selection stats; defaults to `-min/-max`.
+- `-min/-max` — hard-selected insert-length window used for hard-kept artifact outputs and `hard_kept` in TSV (**default min=1**).
+- `-score-min/-score-max` — broader insert-length range used for weighted size-selection stats and emitted to `-fragments-tsv` when TSV output is enabled; defaults to `-min/-max`.
 - `-size-model hard|normal|triangular|soft-window` — per-fragment size-selection weight model (**default `hard`**).
 - `-size-mean`, `-size-sd`, `-size-edge-sd` — parameters for `normal`, `triangular`, and `soft-window` scoring.
-- `-gff <path|->` — GFF3 out for hard-kept fragments; `-` = STDOUT.
-- `-fragments-fasta <path|->` — FASTA sequences for hard-kept fragments, using the same saved fragment set and ordinals as GFF; `-` = STDOUT; empty string disables (**default disabled**).
-- `-fragments-tsv <path|->` — per-fragment TSV for score-range fragments (**default `fragments.tsv`; empty string disables**).
-- `-json <path>` — write a run summary (counts, bases, per-chrom stats, and size-selection weighted stats).
+- `-json <path|->` — write a run summary JSON document with counts, bases, per-chromosome stats, and size-selection weighted stats; `-` = STDOUT. When no output flags are set, radigest writes this JSON summary to STDOUT by default.
+- `-gff <path|->` — optional GFF3 output for hard-kept fragments; `-` = STDOUT; empty string disables (**default disabled**).
+- `-fragments-fasta <path|->` — optional FASTA sequences for hard-kept fragments, using the same saved fragment set and ordinals as GFF; `-` = STDOUT; empty string disables (**default disabled**).
+- `-fragments-tsv <path|->` — optional per-fragment TSV for score-range fragments; `-` = STDOUT; empty string disables (**default disabled**).
 - `-threads <n>` — positive worker count; `-v`, `-version`, `-list-enzymes`.
 - **Simulation:** `-sim-len <bp>`, `-sim-gc <0..1>` (invalid values error), `-sim-seed <int>` (emits a single `chr1`).
 - **Modes:** `-allow-same` (keep AA/BB in double-digest), `-include-ends` (also emit terminal chromosome/contig-end fragments), `-strict-cuts` (error if a site lacks `^` and would otherwise fall back to mid-site).
@@ -76,45 +79,70 @@ radigest is a deterministic sequence-level model. It identifies recognition site
 
 ## Outputs
 
-### GFF3
+If no output flags are set, radigest writes a run summary JSON document to STDOUT. If any output flag is set, radigest writes exactly the requested outputs. GFF3, TSV, and FASTA are disabled unless explicitly requested. At most one active output may target STDOUT.
 
-```
-##gff-version 3
-chr1	radigest	fragment	<start>	<end>	.	+	.	ID=chr1_1;Length=123
-```
-
-`start/end` are **1-based closed**; `Length` is `end - start + 1`. Ordering is deterministic per chromosome.
-
-### Fragment FASTA
-
-When `-fragments-fasta` is set, radigest writes FASTA records for the hard-kept fragments that are saved to GFF:
-
-```text
->chr1_1 chrom=chr1 start0=10422 end0=10731 length=309
-AATT...
-```
-
-The fragment ID uses the same per-chromosome ordinal as GFF. Header coordinates are 0-based half-open. Use `-min 0 -max <large>` to emit every internal digest fragment that radigest would otherwise keep under the selected digest mode; terminal contig-end fragments still require `-include-ends`.
-
-### Fragment TSV
-
-By default, radigest also writes a per-fragment TSV for fragments in the score range:
-
-```
-chrom	start0	end0	length	hard_kept	size_weight
-chr1	10422	10731	309	true	0.982143
-chr1	18831	18922	91	false	0.014221
-```
-
-`hard_kept` is true when the insert length is inside `-min/-max`. `size_weight` is the selected size model evaluated on insert length only. Use `-fragments-tsv ""` to disable this output.
-
-### JSON (optional)
+### JSON summary
 
 ```json
 {
+  "schema_version": 1,
+  "radigest_version": "v0.1.0",
+  "command": [
+    "radigest",
+    "-fasta",
+    "ref.fa",
+    "-enzymes",
+    "EcoRI,MseI",
+    "-min",
+    "100",
+    "-max",
+    "800",
+    "-score-min",
+    "1",
+    "-score-max",
+    "1000",
+    "-size-model",
+    "soft-window",
+    "-size-edge-sd",
+    "25",
+    "-json",
+    "run.json",
+    "-gff",
+    "fragments.gff3",
+    "-fragments-tsv",
+    "fragments.tsv",
+    "-fragments-fasta",
+    "fragments.fa",
+    "-threads",
+    "8"
+  ],
+  "input": {
+    "source": "fasta",
+    "fasta": "ref.fa"
+  },
+  "parameters": {
+    "min_length": 100,
+    "max_length": 800,
+    "score_min": 1,
+    "score_max": 1000,
+    "size_model": "soft-window",
+    "size_edge_sd": 25,
+    "threads": 8,
+    "allow_same": false,
+    "strict_cuts": false,
+    "include_ends": false
+  },
+  "outputs": {
+    "json": "run.json",
+    "gff": "fragments.gff3",
+    "fragments_tsv": "fragments.tsv",
+    "fragments_fasta": "fragments.fa"
+  },
+  "warnings": [],
   "enzymes": ["EcoRI", "MseI"],
   "min_length": 100,
   "max_length": 800,
+  "gff": "fragments.gff3",
   "fragments_tsv": "fragments.tsv",
   "fragments_fasta": "fragments.fa",
   "size_selection": {
@@ -135,6 +163,40 @@ chr1	18831	18922	91	false	0.014221
   "per_chromosome": { "chr1": { "fragments": 23456, "bases": 3456789 } }
 }
 ```
+
+`schema_version`, `radigest_version`, `command`, `input`, `parameters`, `outputs`, and `warnings` provide a stable provenance header for downstream tools. For simulated input, the `input` block records both `sim_seed_requested` and `sim_seed_resolved`; the resolved seed reproduces runs where `-sim-seed 0` requested a time-based seed. The top-level `gff`, `fragments_tsv`, and `fragments_fasta` fields are retained for compatibility and are present only when those artifact outputs are enabled.
+
+### GFF3
+
+```
+##gff-version 3
+chr1	radigest	fragment	<start>	<end>	.	+	.	ID=chr1_1;Length=123
+```
+
+`start/end` are **1-based closed**; `Length` is `end - start + 1`. Ordering is deterministic per chromosome.
+
+### Fragment FASTA
+
+When `-fragments-fasta` is set, radigest writes FASTA records for the hard-kept fragments:
+
+```text
+>chr1_1 chrom=chr1 start0=10422 end0=10731 length=309
+AATT...
+```
+
+The fragment ID uses the same per-chromosome ordinal as GFF. Header coordinates are 0-based half-open. Use `-min 0 -max <large>` to emit every internal digest fragment that radigest would otherwise keep under the selected digest mode; terminal contig-end fragments still require `-include-ends`.
+
+### Fragment TSV
+
+When `-fragments-tsv` is set, radigest writes a per-fragment TSV for fragments in the score range:
+
+```
+chrom	start0	end0	length	hard_kept	size_weight
+chr1	10422	10731	309	true	0.982143
+chr1	18831	18922	91	false	0.014221
+```
+
+`hard_kept` is true when the insert length is inside `-min/-max`. `size_weight` is the selected size model evaluated on insert length only.
 
 ---
 
@@ -175,7 +237,7 @@ scripts/radigest-screen-pairs \
   --out-dir pair_screen
 ```
 
-The screen writes one JSON summary per pair under `pair_screen/json/` and logs under `pair_screen/logs/`. It disables GFF and fragment TSV output for speed during initial screening.
+The screen writes one JSON summary per pair under `pair_screen/json/` and logs under `pair_screen/logs/`. It requests only JSON summaries, so GFF, TSV, and FASTA artifact outputs are omitted during initial screening.
 
 Rank pairs by weighted bases, or by genome percentage if a FASTA denominator is provided:
 

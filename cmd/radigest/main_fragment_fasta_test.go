@@ -1,7 +1,7 @@
 package main
 
 import (
-	"flag"
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,9 +17,8 @@ func TestMainWritesFragmentFASTAForHardKeptFragments(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	flag.CommandLine = flag.NewFlagSet("radigest", flag.ExitOnError)
-	os.Args = []string{
-		"radigest",
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{
 		"-fasta", refPath,
 		"-enzymes", "EcoRI,MseI",
 		"-min", "1",
@@ -28,8 +27,9 @@ func TestMainWritesFragmentFASTAForHardKeptFragments(t *testing.T) {
 		"-fragments-tsv", "",
 		"-fragments-fasta", fastaPath,
 		"-threads", "1",
+	}, strings.NewReader(""), &stdout, &stderr); err != nil {
+		t.Fatalf("run returned error: %v\nstderr:\n%s", err, stderr.String())
 	}
-	main()
 
 	raw, err := os.ReadFile(fastaPath)
 	if err != nil {
