@@ -1,0 +1,561 @@
+#!/usr/bin/env python3
+"""Plan ddRAD/GBS sequencing depth from a radigest ranked-pairs TSV.
+
+This is a deterministic budget calculator layered on top of
+``radigest-rank-pairs``. It treats ``weighted_fragments`` as the number of
+recovered loci/fragment molecules competing for sequencing reads and uses the
+reported or supplied genome denominator to estimate how much weighted target can
+be supported at a requested mean depth.
+
+The calculations intentionally do not model per-locus depth dispersion. They are
+rough sequencing-budget estimates for comparing enzyme pairs and multiplexing
+plans.
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import gzip
+import math
+import sys
+from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
+from pathlib import Path
+from typing import TextIO
+
+
+@dataclass(frozen=True)
+class GenomeBases:
+    all_bases: int
+    non_n_bases: int
+
+
+@dataclass(frozen=True)
+class BudgetConfig:
+    read_layout: str
+    read_length: int
+    lane_read_pairs: float
+    lanes: int
+    usable_read_fraction: float
+    desired_depth: float
+    samples: int | None
+    target_genome_pct: float | None
+    genome_bases: int | None
+
+    @property
+    def effective_read_pairs_per_lane(self) -> float:
+        return self.lane_read_pairs * self.usable_read_fraction
+
+    @property
+    def effective_read_pairs_total(self) -> float:
+        return self.effective_read_pairs_per_lane * self.lanes
+
+
+@dataclass(frozen=True)
+class PairBudget:
+    weighted_genome_pct: float | None
+    read_pairs_per_sample: float | None
+    mean_depth_full_target: float | None
+    full_target_passes_depth: bool | None
+    budget_supported_genome_pct: float | None
+    budget_supported_weighted_bases: float | None
+    required_pairs_per_sample_full_target: float | None
+    max_samples_per_lane_full_target: int | None
+    max_samples_total_full_target: int | None
+    lanes_required_full_target: int | None
+    target_possible: bool | None
+    target_fraction_of_weighted_target: float | None
+    target_weighted_fragments: float | None
+    required_pairs_per_sample_for_target: float | None
+    max_samples_per_lane_for_target: int | None
+    max_samples_total_for_target: int | None
+    lanes_required_for_target: int | None
+    budget_supports_target: bool | None
+    adapter_threshold_bp: int
+    overlap_threshold_bp: int | None
+    mean_insert_category: str
+
+
+def open_text(path: Path) -> TextIO:
+    if path.suffix == ".gz":
+        return gzip.open(path, "rt")
+    return path.open()
+
+
+def fasta_bases(path: Path) -> GenomeBases:
+    all_bases = 0
+    non_n_bases = 0
+    with open_text(path) as handle:
+        for line in handle:
+            if not line or line.startswith(">"):
+                continue
+            seq = line.strip().upper()
+            all_bases += len(seq)
+            non_n_bases += sum(base != "N" for base in seq)
+    if all_bases == 0:
+        raise SystemExit(f"No FASTA bases found in {path}")
+    return GenomeBases(all_bases=all_bases, non_n_bases=non_n_bases)
+
+
+def parse_optional_float(value: str | None) -> float | None:
+    if value is None:
+        return None
+    value = value.strip()
+    if value == "":
+        return None
+    return float(value)
+
+
+def parse_required_float(row: dict[str, str], name: str) -> float:
+    value = parse_optional_float(row.get(name))
+    if value is None:
+        raise SystemExit(f"Input TSV is missing required numeric column {name!r} or contains a blank value.")
+    return value
+
+
+def bool_text(value: bool | None) -> str:
+    if value is None:
+        return ""
+    return "true" if value else "false"
+
+
+def format_float(value: float | None, digits: int = 6) -> str:
+    if value is None or math.isnan(value):
+        return ""
+    return f"{value:.{digits}f}"
+
+
+def format_int(value: int | None) -> str:
+    if value is None:
+        return ""
+    return str(value)
+
+
+def floor_nonnegative(value: float | None) -> int | None:
+    if value is None or value < 0 or math.isnan(value) or math.isinf(value):
+        return None
+    return math.floor(value)
+
+
+def ceil_nonnegative(value: float | None) -> int | None:
+    if value is None or value < 0 or math.isnan(value) or math.isinf(value):
+        return None
+    return math.ceil(value)
+
+
+def safe_div(numerator: float, denominator: float) -> float | None:
+    if denominator <= 0:
+        return None
+    return numerator / denominator
+
+
+def infer_weighted_genome_pct(row: dict[str, str], weighted_bases: float, genome_bases: int | None) -> float | None:
+    weighted_genome_pct = parse_optional_float(row.get("weighted_genome_pct"))
+    if weighted_genome_pct is not None:
+        return weighted_genome_pct
+    if genome_bases is not None and genome_bases > 0:
+        return 100.0 * weighted_bases / genome_bases
+    return None
+
+
+def mean_insert_category(read_layout: str, read_length: int, mean_weighted_length: float) -> tuple[int, int | None, str]:
+    adapter_threshold = read_length
+    if read_layout == "pe":
+        overlap_threshold = 2 * read_length
+        if mean_weighted_length <= 0:
+            category = "unknown"
+        elif mean_weighted_length < adapter_threshold:
+            category = "mean_lt_read_length_adapter_risk"
+        elif mean_weighted_length < overlap_threshold:
+            category = "mean_lt_2_read_lengths_overlap_risk"
+        else:
+            category = "mean_ge_2_read_lengths"
+        return adapter_threshold, overlap_threshold, category
+
+    if mean_weighted_length <= 0:
+        category = "unknown"
+    elif mean_weighted_length < adapter_threshold:
+        category = "mean_lt_read_length_adapter_risk"
+    else:
+        category = "mean_ge_read_length"
+    return adapter_threshold, None, category
+
+
+def compute_budget(row: dict[str, str], cfg: BudgetConfig) -> PairBudget:
+    weighted_fragments = parse_required_float(row, "weighted_fragments")
+    weighted_bases = parse_required_float(row, "weighted_bases")
+    mean_weighted_length = parse_required_float(row, "mean_weighted_length")
+    weighted_genome_pct = infer_weighted_genome_pct(row, weighted_bases, cfg.genome_bases)
+
+    read_pairs_per_sample = None
+    mean_depth_full_target = None
+    full_target_passes_depth = None
+    budget_supported_genome_pct = None
+    budget_supported_weighted_bases = None
+    lanes_required_full_target = None
+    budget_supports_target = None
+
+    if cfg.samples is not None:
+        read_pairs_per_sample = cfg.effective_read_pairs_total / cfg.samples
+        mean_depth_full_target = safe_div(read_pairs_per_sample, weighted_fragments)
+        if mean_depth_full_target is not None:
+            full_target_passes_depth = mean_depth_full_target >= cfg.desired_depth
+        if mean_depth_full_target is not None and cfg.desired_depth > 0:
+            supported_fraction = min(1.0, mean_depth_full_target / cfg.desired_depth)
+            budget_supported_weighted_bases = weighted_bases * supported_fraction
+            if weighted_genome_pct is not None:
+                budget_supported_genome_pct = weighted_genome_pct * supported_fraction
+        required_for_lanes = cfg.desired_depth * weighted_fragments if weighted_fragments > 0 else None
+        if required_for_lanes is not None:
+            lanes_required_full_target = ceil_nonnegative(
+                cfg.samples * required_for_lanes / cfg.effective_read_pairs_per_lane
+            )
+
+    required_pairs_per_sample_full_target = None
+    max_samples_per_lane_full_target = None
+    max_samples_total_full_target = None
+    if weighted_fragments > 0:
+        required_pairs_per_sample_full_target = cfg.desired_depth * weighted_fragments
+        max_samples_per_lane_full_target = floor_nonnegative(
+            cfg.effective_read_pairs_per_lane / required_pairs_per_sample_full_target
+        )
+        max_samples_total_full_target = floor_nonnegative(
+            cfg.effective_read_pairs_total / required_pairs_per_sample_full_target
+        )
+
+    target_possible = None
+    target_fraction = None
+    target_weighted_fragments = None
+    required_pairs_per_sample_for_target = None
+    max_samples_per_lane_for_target = None
+    max_samples_total_for_target = None
+    lanes_required_for_target = None
+
+    if cfg.target_genome_pct is not None:
+        if weighted_genome_pct is None or weighted_genome_pct <= 0:
+            target_possible = None
+        else:
+            target_possible = cfg.target_genome_pct <= weighted_genome_pct
+            if target_possible:
+                target_fraction = cfg.target_genome_pct / weighted_genome_pct
+                target_weighted_fragments = weighted_fragments * target_fraction
+                required_pairs_per_sample_for_target = cfg.desired_depth * target_weighted_fragments
+                if required_pairs_per_sample_for_target > 0:
+                    max_samples_per_lane_for_target = floor_nonnegative(
+                        cfg.effective_read_pairs_per_lane / required_pairs_per_sample_for_target
+                    )
+                    max_samples_total_for_target = floor_nonnegative(
+                        cfg.effective_read_pairs_total / required_pairs_per_sample_for_target
+                    )
+                    if cfg.samples is not None:
+                        lanes_required_for_target = ceil_nonnegative(
+                            cfg.samples
+                            * required_pairs_per_sample_for_target
+                            / cfg.effective_read_pairs_per_lane
+                        )
+        if budget_supported_genome_pct is not None:
+            budget_supports_target = budget_supported_genome_pct >= cfg.target_genome_pct
+
+    adapter_threshold, overlap_threshold, category = mean_insert_category(
+        cfg.read_layout, cfg.read_length, mean_weighted_length
+    )
+
+    return PairBudget(
+        weighted_genome_pct=weighted_genome_pct,
+        read_pairs_per_sample=read_pairs_per_sample,
+        mean_depth_full_target=mean_depth_full_target,
+        full_target_passes_depth=full_target_passes_depth,
+        budget_supported_genome_pct=budget_supported_genome_pct,
+        budget_supported_weighted_bases=budget_supported_weighted_bases,
+        required_pairs_per_sample_full_target=required_pairs_per_sample_full_target,
+        max_samples_per_lane_full_target=max_samples_per_lane_full_target,
+        max_samples_total_full_target=max_samples_total_full_target,
+        lanes_required_full_target=lanes_required_full_target,
+        target_possible=target_possible,
+        target_fraction_of_weighted_target=target_fraction,
+        target_weighted_fragments=target_weighted_fragments,
+        required_pairs_per_sample_for_target=required_pairs_per_sample_for_target,
+        max_samples_per_lane_for_target=max_samples_per_lane_for_target,
+        max_samples_total_for_target=max_samples_total_for_target,
+        lanes_required_for_target=lanes_required_for_target,
+        budget_supports_target=budget_supports_target,
+        adapter_threshold_bp=adapter_threshold,
+        overlap_threshold_bp=overlap_threshold,
+        mean_insert_category=category,
+    )
+
+
+APPENDED_COLUMNS = [
+    "read_layout",
+    "read_length",
+    "lane_read_pairs",
+    "lanes",
+    "usable_read_fraction",
+    "effective_read_pairs_per_lane",
+    "effective_read_pairs_total",
+    "samples",
+    "read_pairs_per_sample",
+    "desired_depth",
+    "mean_depth_full_target",
+    "full_target_passes_depth",
+    "budget_supported_genome_pct",
+    "budget_supported_weighted_bases",
+    "required_pairs_per_sample_full_target",
+    "max_samples_per_lane_full_target",
+    "max_samples_total_full_target",
+    "lanes_required_full_target",
+    "target_genome_pct",
+    "target_possible",
+    "budget_supports_target",
+    "target_fraction_of_weighted_target",
+    "target_weighted_fragments",
+    "required_pairs_per_sample_for_target",
+    "max_samples_per_lane_for_target",
+    "max_samples_total_for_target",
+    "lanes_required_for_target",
+    "adapter_threshold_bp",
+    "overlap_threshold_bp",
+    "mean_insert_category",
+]
+
+
+def append_budget_columns(row: dict[str, str], budget: PairBudget, cfg: BudgetConfig) -> dict[str, str]:
+    out = dict(row)
+    # Ensure this column is populated when --genome-bases/--fasta backfills it.
+    if "weighted_genome_pct" in out and not out["weighted_genome_pct"].strip():
+        out["weighted_genome_pct"] = format_float(budget.weighted_genome_pct)
+
+    out.update(
+        {
+            "read_layout": cfg.read_layout,
+            "read_length": str(cfg.read_length),
+            "lane_read_pairs": format_float(cfg.lane_read_pairs),
+            "lanes": str(cfg.lanes),
+            "usable_read_fraction": format_float(cfg.usable_read_fraction),
+            "effective_read_pairs_per_lane": format_float(cfg.effective_read_pairs_per_lane),
+            "effective_read_pairs_total": format_float(cfg.effective_read_pairs_total),
+            "samples": "" if cfg.samples is None else str(cfg.samples),
+            "read_pairs_per_sample": format_float(budget.read_pairs_per_sample),
+            "desired_depth": format_float(cfg.desired_depth),
+            "mean_depth_full_target": format_float(budget.mean_depth_full_target),
+            "full_target_passes_depth": bool_text(budget.full_target_passes_depth),
+            "budget_supported_genome_pct": format_float(budget.budget_supported_genome_pct),
+            "budget_supported_weighted_bases": format_float(budget.budget_supported_weighted_bases),
+            "required_pairs_per_sample_full_target": format_float(
+                budget.required_pairs_per_sample_full_target
+            ),
+            "max_samples_per_lane_full_target": format_int(budget.max_samples_per_lane_full_target),
+            "max_samples_total_full_target": format_int(budget.max_samples_total_full_target),
+            "lanes_required_full_target": format_int(budget.lanes_required_full_target),
+            "target_genome_pct": "" if cfg.target_genome_pct is None else format_float(cfg.target_genome_pct),
+            "target_possible": bool_text(budget.target_possible),
+            "budget_supports_target": bool_text(budget.budget_supports_target),
+            "target_fraction_of_weighted_target": format_float(
+                budget.target_fraction_of_weighted_target
+            ),
+            "target_weighted_fragments": format_float(budget.target_weighted_fragments),
+            "required_pairs_per_sample_for_target": format_float(
+                budget.required_pairs_per_sample_for_target
+            ),
+            "max_samples_per_lane_for_target": format_int(budget.max_samples_per_lane_for_target),
+            "max_samples_total_for_target": format_int(budget.max_samples_total_for_target),
+            "lanes_required_for_target": format_int(budget.lanes_required_for_target),
+            "adapter_threshold_bp": str(budget.adapter_threshold_bp),
+            "overlap_threshold_bp": "" if budget.overlap_threshold_bp is None else str(budget.overlap_threshold_bp),
+            "mean_insert_category": budget.mean_insert_category,
+        }
+    )
+    return out
+
+
+def read_rows(path: Path) -> tuple[list[str], list[dict[str, str]]]:
+    with path.open(newline="") as handle:
+        reader = csv.DictReader(handle, delimiter="\t")
+        if reader.fieldnames is None:
+            raise SystemExit(f"Input TSV {path} has no header.")
+        rows = [dict(row) for row in reader]
+    if not rows:
+        raise SystemExit(f"Input TSV {path} has no rows.")
+    return list(reader.fieldnames), rows
+
+
+def write_rows(fieldnames: list[str], rows: list[dict[str, str]], out: TextIO) -> None:
+    writer = csv.DictWriter(out, fieldnames=fieldnames, delimiter="\t", lineterminator="\n")
+    writer.writeheader()
+    writer.writerows(rows)
+
+
+def positive_int(value: str) -> int:
+    parsed = int(value)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("must be > 0")
+    return parsed
+
+
+def positive_float(value: str) -> float:
+    parsed = float(value)
+    if not math.isfinite(parsed) or parsed <= 0:
+        raise argparse.ArgumentTypeError("must be a finite value > 0")
+    return parsed
+
+
+def positive_count_decimal(value: str) -> Decimal:
+    """Parse counts such as 50000000, 50M, 1.2G, or 300_000_000."""
+    text = value.strip().replace("_", "")
+    if text == "":
+        raise argparse.ArgumentTypeError("must be a finite count > 0")
+
+    suffixes = {
+        "k": Decimal("1e3"),
+        "m": Decimal("1e6"),
+        "g": Decimal("1e9"),
+        "t": Decimal("1e12"),
+    }
+    multiplier = Decimal(1)
+    suffix = text[-1:].lower()
+    if suffix in suffixes:
+        multiplier = suffixes[suffix]
+        text = text[:-1]
+        if text == "":
+            raise argparse.ArgumentTypeError("must be a finite count > 0")
+
+    try:
+        parsed = Decimal(text) * multiplier
+    except InvalidOperation as exc:
+        raise argparse.ArgumentTypeError(f"invalid count {value!r}") from exc
+    if not parsed.is_finite() or parsed <= 0:
+        raise argparse.ArgumentTypeError("must be a finite count > 0")
+    return parsed
+
+
+def positive_count(value: str) -> float:
+    return float(positive_count_decimal(value))
+
+
+def positive_count_int(value: str) -> int:
+    parsed = positive_count_decimal(value)
+    integral = parsed.to_integral_value()
+    if parsed != integral:
+        raise argparse.ArgumentTypeError("must resolve to an integer count")
+    return int(integral)
+
+
+def fraction_0_1(value: str) -> float:
+    parsed = float(value)
+    if not math.isfinite(parsed) or parsed <= 0 or parsed > 1:
+        raise argparse.ArgumentTypeError("must be in (0, 1]")
+    return parsed
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Append deterministic sequencing-budget/depth estimates to a "
+            "radigest-rank-pairs TSV."
+        )
+    )
+    parser.add_argument("ranked_tsv", type=Path, help="TSV produced by radigest-rank-pairs")
+    parser.add_argument(
+        "--read-layout",
+        choices=("pe", "se"),
+        default="pe",
+        help="sequencing layout; used for read-length diagnostics only in this version",
+    )
+    parser.add_argument("--read-length", type=positive_int, required=True, help="read length in bp, e.g. 150")
+    budget = parser.add_mutually_exclusive_group(required=True)
+    budget.add_argument(
+        "--lane-read-pairs",
+        type=positive_count,
+        help=(
+            "PE read pairs per lane, e.g. 300M; for --read-layout se, "
+            "use single-end reads per lane"
+        ),
+    )
+    budget.add_argument(
+        "--flowcell-read-pairs",
+        type=positive_count,
+        help=(
+            "total read pairs across a one-flowcell/run budget, e.g. 50M; "
+            "mutually exclusive with --lane-read-pairs"
+        ),
+    )
+    parser.add_argument("--lanes", type=positive_int, default=1, help="number of lanes in the sequencing budget")
+    parser.add_argument(
+        "--usable-read-fraction",
+        type=fraction_0_1,
+        default=1.0,
+        help="fraction of lane reads usable after demultiplexing/QC/deduplication",
+    )
+    parser.add_argument("--samples", type=positive_int, default=None, help="planned number of samples")
+    parser.add_argument(
+        "--desired-depth",
+        type=positive_float,
+        required=True,
+        help="desired mean read-pair depth per recovered locus; not a callable-depth distribution model",
+    )
+    parser.add_argument(
+        "--target-genome-pct",
+        type=positive_float,
+        default=None,
+        help="target weighted genome percentage to support at --desired-depth",
+    )
+    denom = parser.add_mutually_exclusive_group()
+    denom.add_argument("--fasta", type=Path, help="reference FASTA for backfilling weighted_genome_pct")
+    denom.add_argument("--genome-bases", type=positive_count_int, help="explicit genome denominator, e.g. 2643888753")
+    parser.add_argument(
+        "--denominator",
+        choices=("non-n", "all"),
+        default="non-n",
+        help="FASTA denominator when --fasta is used",
+    )
+    parser.add_argument("--top", type=positive_int, default=None, help="only process the first N input rows")
+    parser.add_argument("--out", type=Path, default=None, help="output TSV; default stdout")
+
+    args = parser.parse_args()
+    if args.flowcell_read_pairs is not None:
+        if args.lanes != 1:
+            parser.error("--lanes is only meaningful with --lane-read-pairs; omit --lanes when using --flowcell-read-pairs")
+        args.lane_read_pairs = args.flowcell_read_pairs
+        args.lanes = 1
+    return args
+
+
+def main() -> int:
+    args = parse_args()
+
+    genome_bases: int | None = args.genome_bases
+    if args.fasta is not None:
+        bases = fasta_bases(args.fasta)
+        genome_bases = bases.non_n_bases if args.denominator == "non-n" else bases.all_bases
+        print(f"genome_bases\t{genome_bases}\tdenominator\t{args.denominator}", file=sys.stderr)
+
+    cfg = BudgetConfig(
+        read_layout=args.read_layout,
+        read_length=args.read_length,
+        lane_read_pairs=args.lane_read_pairs,
+        lanes=args.lanes,
+        usable_read_fraction=args.usable_read_fraction,
+        desired_depth=args.desired_depth,
+        samples=args.samples,
+        target_genome_pct=args.target_genome_pct,
+        genome_bases=genome_bases,
+    )
+
+    fieldnames, rows = read_rows(args.ranked_tsv)
+    if args.top is not None:
+        rows = rows[: args.top]
+
+    appended_fieldnames = fieldnames + [name for name in APPENDED_COLUMNS if name not in fieldnames]
+    output_rows = [append_budget_columns(row, compute_budget(row, cfg), cfg) for row in rows]
+
+    if args.out is None:
+        write_rows(appended_fieldnames, output_rows, sys.stdout)
+    else:
+        with args.out.open("w", newline="") as out:
+            write_rows(appended_fieldnames, output_rows, out)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
