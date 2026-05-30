@@ -1,6 +1,7 @@
 package digest
 
 import (
+	"bytes"
 	"fmt"
 	"strings"
 
@@ -14,7 +15,9 @@ type Fragment struct {
 }
 
 type matcher struct {
+	exact  []byte
 	mask   []uint8
+	anchor int
 	offset int
 }
 
@@ -73,7 +76,15 @@ func TryNewPlanWithOptions(ens []enzyme.Enzyme, opt Options) (Plan, error) {
 		if err != nil {
 			return Plan{}, fmt.Errorf("enzyme %s recognition %q: %w", e.Name, e.Recognition, err)
 		}
-		p.m[i] = matcher{mask: mask, offset: offset}
+		mat := matcher{
+			mask:   mask,
+			anchor: enzyme.BestMaskAnchor(mask),
+			offset: offset,
+		}
+		if enzyme.IsExactACGT(site) {
+			mat.exact = []byte(strings.ToUpper(site))
+		}
+		p.m[i] = mat
 	}
 	return p, nil
 }
@@ -92,6 +103,13 @@ func newCutScanner(mat matcher, seq []byte) cutScanner {
 }
 
 func (s *cutScanner) next() (int, bool) {
+	if len(s.mat.exact) > 0 {
+		return s.nextExact()
+	}
+	return s.nextMask()
+}
+
+func (s *cutScanner) nextMask() (int, bool) {
 	n := len(s.mat.mask)
 	if n == 0 || len(s.seq) < n {
 		return 0, false
@@ -99,11 +117,27 @@ func (s *cutScanner) next() (int, bool) {
 	for s.pos <= len(s.seq)-n {
 		pos := s.pos
 		s.pos++
-		if enzyme.MatchMask(s.mat.mask, s.seq[pos:pos+n]) {
+		if enzyme.MatchMaskAt(s.mat.mask, s.mat.anchor, s.seq[pos:pos+n]) {
 			return pos + s.mat.offset, true
 		}
 	}
 	return 0, false
+}
+
+func (s *cutScanner) nextExact() (int, bool) {
+	n := len(s.mat.exact)
+	if n == 0 || len(s.seq) < n || s.pos > len(s.seq)-n {
+		return 0, false
+	}
+
+	idx := bytes.Index(s.seq[s.pos:], s.mat.exact)
+	if idx < 0 {
+		return 0, false
+	}
+
+	siteStart := s.pos + idx
+	s.pos = siteStart + 1 // preserve overlapping motif detection
+	return siteStart + s.mat.offset, true
 }
 
 func emitIfKept(start, end, min, max int, emit func(Fragment) error) error {

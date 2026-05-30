@@ -40,3 +40,22 @@ func TestDoubleDigest_AB_BA_Filter(t *testing.T) {
 		}
 	}
 }
+
+func TestExactScannerDetectsOverlappingMotifs(t *testing.T) {
+	eA := enzyme.Enzyme{Name: "FakeExact", Recognition: "AA^A"}
+	seq := []byte("AAAAA")
+
+	frags := Digest(seq, []enzyme.Enzyme{eA}, 0, 1<<30)
+	want := []Fragment{
+		{Start: 2, End: 3},
+		{Start: 3, End: 4},
+	}
+	if len(frags) != len(want) {
+		t.Fatalf("got %d fragments, want %d: %#v", len(frags), len(want), frags)
+	}
+	for i := range want {
+		if frags[i] != want[i] {
+			t.Fatalf("fragment %d got %+v, want %+v", i, frags[i], want[i])
+		}
+	}
+}
