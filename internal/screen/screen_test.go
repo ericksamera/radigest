@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"math"
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 
@@ -124,6 +126,61 @@ func assertSummaryMatches(t *testing.T, got, want PairSummary) {
 	assertFloatNear(t, "weighted fragments", got.SizeSelection.WeightedFragments, want.SizeSelection.WeightedFragments)
 	assertFloatNear(t, "weighted bases", got.SizeSelection.WeightedBases, want.SizeSelection.WeightedBases)
 	assertFloatNear(t, "mean weighted length", got.SizeSelection.MeanWeightedLength, want.SizeSelection.MeanWeightedLength)
+}
+
+func TestBuildCutIndexFromRecordsMatchesBuildCutIndex(t *testing.T) {
+	records := testRecords()
+	ch := make(chan fasta.Record)
+	go func() {
+		defer close(ch)
+		for _, rec := range records {
+			ch <- rec
+		}
+	}()
+
+	got, err := BuildCutIndexFromRecords(ch, testEnzymes(), digest.Options{})
+	if err != nil {
+		t.Fatalf("BuildCutIndexFromRecords returned error: %v", err)
+	}
+	want, err := BuildCutIndex(records, testEnzymes(), digest.Options{})
+	if err != nil {
+		t.Fatalf("BuildCutIndex returned error: %v", err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("streamed cut index got %#v want %#v", got, want)
+	}
+}
+
+func TestBuildCutIndexFromRecordsRejectsNilChannel(t *testing.T) {
+	_, err := BuildCutIndexFromRecords(nil, testEnzymes(), digest.Options{})
+	if err == nil {
+		t.Fatal("BuildCutIndexFromRecords accepted nil records channel")
+	}
+}
+
+func TestBuildCutIndexFromFASTAMatchesBuildCutIndex(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "records.fa")
+	data := []byte(`>toy
+AAAAGAATTCTTAAAGAATTCTTT
+>nocut
+CCCCCCCC
+`)
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("write FASTA: %v", err)
+	}
+
+	got, err := BuildCutIndexFromFASTA(path, testEnzymes(), digest.Options{})
+	if err != nil {
+		t.Fatalf("BuildCutIndexFromFASTA returned error: %v", err)
+	}
+	want, err := BuildCutIndex(testRecords(), testEnzymes(), digest.Options{})
+	if err != nil {
+		t.Fatalf("BuildCutIndex returned error: %v", err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("FASTA-streamed cut index got %#v want %#v", got, want)
+	}
 }
 
 func TestBuildCutIndexCachesExpectedCuts(t *testing.T) {

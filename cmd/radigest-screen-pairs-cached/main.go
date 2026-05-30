@@ -17,7 +17,6 @@ import (
 
 	"github.com/ericksamera/radigest/internal/digest"
 	"github.com/ericksamera/radigest/internal/enzyme"
-	"github.com/ericksamera/radigest/internal/fasta"
 	"github.com/ericksamera/radigest/internal/screen"
 	"github.com/ericksamera/radigest/internal/sizeselect"
 )
@@ -65,7 +64,7 @@ func main() {
 		if errors.As(err, &usage) {
 			code = 2
 		}
-		fmt.Fprintln(os.Stderr, "error:", err)
+		_, _ = fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(code)
 	}
 }
@@ -103,11 +102,11 @@ func run(args []string, stdout, stderr io.Writer) error {
 	showVersion := fs.Bool("version", false, "print version and exit")
 
 	fs.Usage = func() {
-		fmt.Fprintln(stderr, "radigest-screen-pairs-cached — cached cut-index enzyme-pair screen")
-		fmt.Fprintln(stderr)
-		fmt.Fprintln(stderr, "Usage:")
-		fmt.Fprintln(stderr, "  radigest-screen-pairs-cached --fasta ref.fa.gz --enzymes enzymes.txt [options]")
-		fmt.Fprintln(stderr)
+		_, _ = fmt.Fprintln(stderr, "radigest-screen-pairs-cached — cached cut-index enzyme-pair screen")
+		_, _ = fmt.Fprintln(stderr)
+		_, _ = fmt.Fprintln(stderr, "Usage:")
+		_, _ = fmt.Fprintln(stderr, "  radigest-screen-pairs-cached --fasta ref.fa.gz --enzymes enzymes.txt [options]")
+		_, _ = fmt.Fprintln(stderr)
 		fs.PrintDefaults()
 	}
 
@@ -140,14 +139,20 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	pairJobs := buildPairJobs(enzymeNames, *outDir, *force, *maxPairs)
-	fmt.Fprintf(stderr, "candidate_enzymes\t%d\n", len(enzymeNames))
-	fmt.Fprintf(stderr, "pair_jobs\t%d\n", len(pairJobs))
+	if _, err := fmt.Fprintf(stderr, "candidate_enzymes\t%d\n", len(enzymeNames)); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(stderr, "pair_jobs\t%d\n", len(pairJobs)); err != nil {
+		return err
+	}
 	if len(pairJobs) == 0 {
 		return nil
 	}
 	if *dryRun {
 		for _, job := range pairJobs {
-			fmt.Fprintf(stdout, "%s\t%s,%s\t%s\n", job.tag, job.enzymeA, job.enzymeB, job.json)
+			if _, err := fmt.Fprintf(stdout, "%s\t%s,%s\t%s\n", job.tag, job.enzymeA, job.enzymeB, job.json); err != nil {
+				return err
+			}
 		}
 		return nil
 	}
@@ -166,17 +171,19 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 
-	records, err := readAllRecords(*fastaPath)
+	index, err := screen.BuildCutIndexFromFASTA(*fastaPath, enzymes, digest.Options{StrictCuts: *strictCuts})
 	if err != nil {
 		return err
 	}
-	index, err := screen.BuildCutIndex(records, enzymes, digest.Options{StrictCuts: *strictCuts})
-	if err != nil {
+	if _, err := fmt.Fprintf(stderr, "records\t%d\n", len(index.Records)); err != nil {
 		return err
 	}
-	fmt.Fprintf(stderr, "records\t%d\n", len(index.Records))
-	fmt.Fprintf(stderr, "cached_cut_sites\t%d\n", index.CachedCutSites())
-	fmt.Fprintf(stderr, "cache_memory_estimate_bytes\t%d\n", index.CacheMemoryEstimateBytes())
+	if _, err := fmt.Fprintf(stderr, "cached_cut_sites\t%d\n", index.CachedCutSites()); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(stderr, "cache_memory_estimate_bytes\t%d\n", index.CacheMemoryEstimateBytes()); err != nil {
+		return err
+	}
 
 	workers := *jobsFlag
 	if workers <= 0 {
@@ -287,25 +294,6 @@ func pairTag(enzymeA, enzymeB string) string {
 	return safeTag.ReplaceAllString(enzymeA+"__"+enzymeB, "_")
 }
 
-func readAllRecords(path string) ([]fasta.Record, error) {
-	ch := make(chan fasta.Record)
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- fasta.Stream(path, ch)
-	}()
-	records := make([]fasta.Record, 0)
-	for rec := range ch {
-		records = append(records, fasta.Record{ID: rec.ID, Seq: append([]byte(nil), rec.Seq...)})
-	}
-	if err := <-errCh; err != nil {
-		return nil, err
-	}
-	if len(records) == 0 {
-		return nil, fmt.Errorf("no FASTA records read from %q", path)
-	}
-	return records, nil
-}
-
 func scorePairJobs(jobs []pairJob, index screen.CutIndex, selector sizeselect.Selector, opt digest.Options, workers int, command []string, stderr io.Writer) error {
 	jobCh := make(chan pairJob)
 	resultCh := make(chan pairResult, len(jobs))
@@ -340,7 +328,9 @@ func scorePairJobs(jobs []pairJob, index screen.CutIndex, selector sizeselect.Se
 		if result.err != nil {
 			status = "error=" + result.err.Error()
 		}
-		fmt.Fprintf(stderr, "%s\t%s\t%s\t%s\n", result.job.tag, status, result.job.json, result.job.log)
+		if _, err := fmt.Fprintf(stderr, "%s\t%s\t%s\t%s\n", result.job.tag, status, result.job.json, result.job.log); err != nil {
+			return err
+		}
 	}
 	if len(failed) > 0 {
 		return fmt.Errorf("failed_pairs\t%d", len(failed))
@@ -358,7 +348,9 @@ func scoreOnePair(job pairJob, index screen.CutIndex, selector sizeselect.Select
 	}
 	summary, err := screen.ScorePair(index, job.enzymeA, job.enzymeB, selector, opt)
 	if err != nil {
-		writePairLog(job, command, started, err)
+		if logErr := writePairLog(job, command, started, err); logErr != nil {
+			return errors.Join(err, logErr)
+		}
 		return err
 	}
 	out := pairJSON{
@@ -375,7 +367,9 @@ func scoreOnePair(job pairJob, index screen.CutIndex, selector sizeselect.Select
 		Screening:       summary.Screening,
 	}
 	if err := writeJSONAtomic(job.json, out); err != nil {
-		writePairLog(job, command, started, err)
+		if logErr := writePairLog(job, command, started, err); logErr != nil {
+			return errors.Join(err, logErr)
+		}
 		return err
 	}
 	return writePairLog(job, command, started, nil)
@@ -424,20 +418,21 @@ func writeJSONAtomic(path string, value any) error {
 }
 
 func writePairLog(job pairJob, command []string, started time.Time, err error) error {
-	f, openErr := os.Create(job.log)
-	if openErr != nil {
-		return openErr
+	if err := os.MkdirAll(filepath.Dir(job.log), 0o755); err != nil {
+		return err
 	}
-	defer f.Close()
-	fmt.Fprintf(f, "pair\t%s,%s\n", job.enzymeA, job.enzymeB)
-	fmt.Fprintf(f, "json\t%s\n", job.json)
-	fmt.Fprintf(f, "started_at\t%s\n", started.Format(time.RFC3339Nano))
-	fmt.Fprintf(f, "finished_at\t%s\n", time.Now().Format(time.RFC3339Nano))
-	fmt.Fprintf(f, "command\t%s\n", strings.Join(command, " "))
+
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("pair\t%s,%s\n", job.enzymeA, job.enzymeB))
+	b.WriteString(fmt.Sprintf("json\t%s\n", job.json))
+	b.WriteString(fmt.Sprintf("started_at\t%s\n", started.Format(time.RFC3339Nano)))
+	b.WriteString(fmt.Sprintf("finished_at\t%s\n", time.Now().Format(time.RFC3339Nano)))
+	b.WriteString(fmt.Sprintf("command\t%s\n", strings.Join(command, " ")))
 	if err != nil {
-		fmt.Fprintf(f, "status\terror\nerror\t%s\n", err)
+		b.WriteString(fmt.Sprintf("status\terror\nerror\t%s\n", err))
 	} else {
-		fmt.Fprintln(f, "status\tok")
+		b.WriteString("status\tok\n")
 	}
-	return nil
+
+	return os.WriteFile(job.log, []byte(b.String()), 0o644)
 }

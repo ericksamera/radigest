@@ -74,30 +74,15 @@ type Pair struct {
 
 // BuildCutIndex scans every input record once per enzyme and stores sorted cut
 // coordinates. Enzyme names must be unique because they are used as map keys.
+//
+// BuildCutIndex accepts a materialized record slice for tests and callers that
+// already hold FASTA records in memory. Cached screening CLIs should prefer
+// BuildCutIndexFromFASTA or BuildCutIndexFromRecords so sequence bytes can be
+// discarded after each record is scanned.
 func BuildCutIndex(records []fasta.Record, enzymes []enzyme.Enzyme, opt digest.Options) (CutIndex, error) {
-	if len(enzymes) == 0 {
-		return CutIndex{}, fmt.Errorf("screen cut index: no enzymes provided")
-	}
-
-	names := make([]string, 0, len(enzymes))
-	plans := make([]digest.Plan, 0, len(enzymes))
-	seen := make(map[string]struct{}, len(enzymes))
-
-	for _, enz := range enzymes {
-		if enz.Name == "" {
-			return CutIndex{}, fmt.Errorf("screen cut index: enzyme with empty name")
-		}
-		if _, ok := seen[enz.Name]; ok {
-			return CutIndex{}, fmt.Errorf("screen cut index: duplicate enzyme name %q", enz.Name)
-		}
-		seen[enz.Name] = struct{}{}
-		names = append(names, enz.Name)
-
-		plan, err := digest.TryNewPlanWithOptions([]enzyme.Enzyme{enz}, digest.Options{StrictCuts: opt.StrictCuts})
-		if err != nil {
-			return CutIndex{}, err
-		}
-		plans = append(plans, plan)
+	names, plans, err := compileCutPlans(enzymes, opt)
+	if err != nil {
+		return CutIndex{}, err
 	}
 
 	idx := CutIndex{
@@ -106,21 +91,114 @@ func BuildCutIndex(records []fasta.Record, enzymes []enzyme.Enzyme, opt digest.O
 	}
 
 	for _, rec := range records {
-		if rec.ID == "" {
-			return CutIndex{}, fmt.Errorf("screen cut index: record with empty ID")
-		}
-		rc := RecordCuts{
-			ID:     rec.ID,
-			Length: len(rec.Seq),
-			Cuts:   make(map[string][]int, len(enzymes)),
-		}
-		for i, plan := range plans {
-			rc.Cuts[names[i]] = plan.Cuts(rec.Seq)
+		rc, err := scanRecordCuts(rec, names, plans)
+		if err != nil {
+			return CutIndex{}, err
 		}
 		idx.Records = append(idx.Records, rc)
 	}
 
 	return idx, nil
+}
+
+// BuildCutIndexFromRecords scans records from a channel and stores only record
+// IDs, record lengths, and per-enzyme cut coordinates. Sequence bytes are not
+// retained after each record has been scanned.
+func BuildCutIndexFromRecords(records <-chan fasta.Record, enzymes []enzyme.Enzyme, opt digest.Options) (CutIndex, error) {
+	if records == nil {
+		return CutIndex{}, fmt.Errorf("screen cut index: records channel is nil")
+	}
+
+	names, plans, err := compileCutPlans(enzymes, opt)
+	if err != nil {
+		return CutIndex{}, err
+	}
+
+	idx := CutIndex{
+		Records:     make([]RecordCuts, 0),
+		EnzymeNames: names,
+	}
+
+	for rec := range records {
+		rc, err := scanRecordCuts(rec, names, plans)
+		if err != nil {
+			return CutIndex{}, err
+		}
+		idx.Records = append(idx.Records, rc)
+	}
+
+	return idx, nil
+}
+
+// BuildCutIndexFromFASTA streams a FASTA file and builds a cut index without
+// retaining full reference sequences. This is the preferred entry point for
+// cached pair-screening commands on large genomes.
+func BuildCutIndexFromFASTA(path string, enzymes []enzyme.Enzyme, opt digest.Options) (CutIndex, error) {
+	ch := make(chan fasta.Record)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- fasta.Stream(path, ch)
+	}()
+
+	idx, buildErr := BuildCutIndexFromRecords(ch, enzymes, opt)
+	if buildErr != nil {
+		for range ch {
+			// Drain the FASTA stream so fasta.Stream can return its error and the
+			// goroutine cannot block while sending a later record.
+		}
+	}
+	streamErr := <-errCh
+	if buildErr != nil {
+		return CutIndex{}, buildErr
+	}
+	if streamErr != nil {
+		return CutIndex{}, streamErr
+	}
+	return idx, nil
+}
+
+func compileCutPlans(enzymes []enzyme.Enzyme, opt digest.Options) ([]string, []digest.Plan, error) {
+	if len(enzymes) == 0 {
+		return nil, nil, fmt.Errorf("screen cut index: no enzymes provided")
+	}
+
+	names := make([]string, 0, len(enzymes))
+	plans := make([]digest.Plan, 0, len(enzymes))
+	seen := make(map[string]struct{}, len(enzymes))
+
+	for _, enz := range enzymes {
+		if enz.Name == "" {
+			return nil, nil, fmt.Errorf("screen cut index: enzyme with empty name")
+		}
+		if _, ok := seen[enz.Name]; ok {
+			return nil, nil, fmt.Errorf("screen cut index: duplicate enzyme name %q", enz.Name)
+		}
+		seen[enz.Name] = struct{}{}
+		names = append(names, enz.Name)
+
+		plan, err := digest.TryNewPlanWithOptions([]enzyme.Enzyme{enz}, digest.Options{StrictCuts: opt.StrictCuts})
+		if err != nil {
+			return nil, nil, err
+		}
+		plans = append(plans, plan)
+	}
+
+	return names, plans, nil
+}
+
+func scanRecordCuts(rec fasta.Record, names []string, plans []digest.Plan) (RecordCuts, error) {
+	if rec.ID == "" {
+		return RecordCuts{}, fmt.Errorf("screen cut index: record with empty ID")
+	}
+	rc := RecordCuts{
+		ID:     rec.ID,
+		Length: len(rec.Seq),
+		Cuts:   make(map[string][]int, len(names)),
+	}
+	for i, plan := range plans {
+		rc.Cuts[names[i]] = plan.Cuts(rec.Seq)
+	}
+	return rc, nil
 }
 
 // ContainsEnzyme reports whether the cut index includes name.
