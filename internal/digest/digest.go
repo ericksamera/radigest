@@ -14,6 +14,26 @@ type Fragment struct {
 	End   int
 }
 
+// Stats summarizes kept digest fragments without materializing Fragment values.
+type Stats struct {
+	Fragments int
+	Bases     int
+}
+
+func (s *Stats) addIfKept(start, end, min, max int) {
+	if ln := end - start; ln >= min && ln <= max {
+		s.Fragments++
+		s.Bases += ln
+	}
+}
+
+func (s *Stats) addTerminalIfKept(start, end, min, max int) {
+	if end <= start {
+		return
+	}
+	s.addIfKept(start, end, min, max)
+}
+
 type matcher struct {
 	exact  []byte
 	mask   []uint8
@@ -264,6 +284,103 @@ func (p Plan) DigestEach(seq []byte, min, max int, emit func(Fragment) error) er
 		return emitTerminalIfKept(lastPos, len(seq), min, max, emit)
 	}
 	return nil
+}
+
+// DigestStats returns hard-window fragment counts and bases without constructing
+// Fragment values or invoking a per-fragment callback. It uses the same fragment
+// semantics as DigestEach for single/double digest, coincident cuts, same-enzyme
+// adjacency, and optional terminal fragments.
+func (p Plan) DigestStats(seq []byte, min, max int) Stats {
+	var stats Stats
+	if p.m[0].mask == nil { // no enzymes compiled
+		return stats
+	}
+
+	aScan := newCutScanner(p.m[0], seq)
+	aPos, aOK := aScan.next()
+
+	// Single-enzyme mode: only the previous cut coordinate is needed.
+	if p.m[1].mask == nil {
+		if !aOK {
+			if p.includeEnds {
+				stats.addTerminalIfKept(0, len(seq), min, max)
+			}
+			return stats
+		}
+		if p.includeEnds {
+			stats.addTerminalIfKept(0, aPos, min, max)
+		}
+		prevPos := aPos
+		for {
+			pos, ok := aScan.next()
+			if !ok {
+				if p.includeEnds {
+					stats.addTerminalIfKept(prevPos, len(seq), min, max)
+				}
+				return stats
+			}
+			stats.addIfKept(prevPos, pos, min, max)
+			prevPos = pos
+		}
+	}
+
+	// Double-enzyme mode: merge the two naturally sorted cut-coordinate streams.
+	bScan := newCutScanner(p.m[1], seq)
+	bPos, bOK := bScan.next()
+	prevType := -1 // 0=A, 1=B
+	prevPos := 0
+	sawCut := false
+	lastPos := 0
+
+	for aOK || bOK {
+		var pos int
+		if aOK && (!bOK || aPos <= bPos) {
+			pos = aPos
+		} else {
+			pos = bPos
+		}
+		hasA := aOK && aPos == pos
+		hasB := bOK && bPos == pos
+
+		if p.includeEnds && !sawCut {
+			stats.addTerminalIfKept(0, pos, min, max)
+		}
+		sawCut = true
+		lastPos = pos
+
+		if hasA && hasB {
+			// Coincident cuts are barriers. Count one zero-length fragment for
+			// the site if the caller's size range allows it, then reset
+			// adjacency so no fragment bridges across the coincident cut.
+			stats.addIfKept(pos, pos, min, max)
+			aPos, aOK = aScan.next()
+			bPos, bOK = bScan.next()
+			prevType = -1
+			prevPos = pos
+			continue
+		}
+
+		curType := 0
+		if hasA {
+			aPos, aOK = aScan.next()
+		} else {
+			curType = 1
+			bPos, bOK = bScan.next()
+		}
+
+		if prevType != -1 && (p.allowSame || prevType != curType) {
+			stats.addIfKept(prevPos, pos, min, max)
+		}
+		prevType, prevPos = curType, pos
+	}
+	if p.includeEnds {
+		if !sawCut {
+			stats.addTerminalIfKept(0, len(seq), min, max)
+			return stats
+		}
+		stats.addTerminalIfKept(lastPos, len(seq), min, max)
+	}
+	return stats
 }
 
 // Digest supports:
