@@ -174,6 +174,43 @@ func emitTerminalIfKept(start, end, min, max int, emit func(Fragment) error) err
 	return emitIfKept(start, end, min, max, emit)
 }
 
+// CutsEach streams sorted cut coordinates for the first enzyme in the plan.
+// Cut coordinates are motif start plus cut offset. The callback is invoked in
+// deterministic genomic cut-coordinate order. If emit returns an error,
+// scanning stops and that error is returned.
+func (p Plan) CutsEach(seq []byte, emit func(int) error) error {
+	if p.m[0].mask == nil { // no enzymes compiled
+		return nil
+	}
+	if emit == nil {
+		return fmt.Errorf("digest cut emit callback is nil")
+	}
+
+	scan := newCutScanner(p.m[0], seq)
+	for {
+		cut, ok := scan.next()
+		if !ok {
+			return nil
+		}
+		if err := emit(cut); err != nil {
+			return err
+		}
+	}
+}
+
+// Cuts returns sorted cut coordinates for the first enzyme in the plan.
+func (p Plan) Cuts(seq []byte) []int {
+	if p.m[0].mask == nil {
+		return nil
+	}
+	cuts := make([]int, 0)
+	_ = p.CutsEach(seq, func(cut int) error {
+		cuts = append(cuts, cut)
+		return nil
+	})
+	return cuts
+}
+
 // DigestEach streams kept fragments to emit without materializing cut arrays or
 // a per-chromosome []Fragment. It supports the same modes as Digest:
 //   - single-enzyme mode (only A configured): consecutive A cuts
@@ -284,6 +321,126 @@ func (p Plan) DigestEach(seq []byte, min, max int, emit func(Fragment) error) er
 		return emitTerminalIfKept(lastPos, len(seq), min, max, emit)
 	}
 	return nil
+}
+
+// DigestCutsEach streams kept fragments from precomputed sorted cut-coordinate
+// slices. If cutsB is nil, single-enzyme semantics are used for cutsA. If cutsB
+// is non-nil, double-digest semantics are used for cutsA and cutsB.
+//
+// The behavior matches Plan.DigestEach for single digest, double digest,
+// coincident cuts, AA/BB suppression, AllowSame, and IncludeEnds, assuming the
+// input cut slices are sorted in ascending cut-coordinate order.
+func DigestCutsEach(cutsA, cutsB []int, seqLen, min, max int, opt Options, emit func(Fragment) error) error {
+	if emit == nil {
+		return fmt.Errorf("digest emit callback is nil")
+	}
+	if seqLen < 0 {
+		return fmt.Errorf("digest sequence length is negative: %d", seqLen)
+	}
+	if cutsB == nil {
+		return digestSingleCutsEach(cutsA, seqLen, min, max, opt, emit)
+	}
+	return digestDoubleCutsEach(cutsA, cutsB, seqLen, min, max, opt, emit)
+}
+
+func digestSingleCutsEach(cuts []int, seqLen, min, max int, opt Options, emit func(Fragment) error) error {
+	if len(cuts) == 0 {
+		if opt.IncludeEnds {
+			return emitTerminalIfKept(0, seqLen, min, max, emit)
+		}
+		return nil
+	}
+	if opt.IncludeEnds {
+		if err := emitTerminalIfKept(0, cuts[0], min, max, emit); err != nil {
+			return err
+		}
+	}
+	prevPos := cuts[0]
+	for _, pos := range cuts[1:] {
+		if err := emitIfKept(prevPos, pos, min, max, emit); err != nil {
+			return err
+		}
+		prevPos = pos
+	}
+	if opt.IncludeEnds {
+		return emitTerminalIfKept(prevPos, seqLen, min, max, emit)
+	}
+	return nil
+}
+
+func digestDoubleCutsEach(cutsA, cutsB []int, seqLen, min, max int, opt Options, emit func(Fragment) error) error {
+	ai, bi := 0, 0
+	prevType := -1 // 0=A, 1=B
+	prevPos := 0
+	sawCut := false
+	lastPos := 0
+
+	for ai < len(cutsA) || bi < len(cutsB) {
+		var pos int
+		if ai < len(cutsA) && (bi >= len(cutsB) || cutsA[ai] <= cutsB[bi]) {
+			pos = cutsA[ai]
+		} else {
+			pos = cutsB[bi]
+		}
+		hasA := ai < len(cutsA) && cutsA[ai] == pos
+		hasB := bi < len(cutsB) && cutsB[bi] == pos
+
+		if opt.IncludeEnds && !sawCut {
+			if err := emitTerminalIfKept(0, pos, min, max, emit); err != nil {
+				return err
+			}
+		}
+		sawCut = true
+		lastPos = pos
+
+		if hasA && hasB {
+			// Coincident cuts are barriers. Emit one zero-length fragment for the
+			// site if the caller's size range allows it, then reset adjacency so no
+			// fragment bridges across the coincident cut.
+			if err := emitIfKept(pos, pos, min, max, emit); err != nil {
+				return err
+			}
+			ai++
+			bi++
+			prevType = -1
+			prevPos = pos
+			continue
+		}
+
+		curType := 0
+		if hasA {
+			ai++
+		} else {
+			curType = 1
+			bi++
+		}
+
+		if prevType != -1 && (opt.AllowSame || prevType != curType) {
+			if err := emitIfKept(prevPos, pos, min, max, emit); err != nil {
+				return err
+			}
+		}
+		prevType, prevPos = curType, pos
+	}
+	if opt.IncludeEnds {
+		if !sawCut {
+			return emitTerminalIfKept(0, seqLen, min, max, emit)
+		}
+		return emitTerminalIfKept(lastPos, seqLen, min, max, emit)
+	}
+	return nil
+}
+
+// DigestCuts returns kept fragments from precomputed sorted cut-coordinate
+// slices. A nil cutsB selects single-enzyme semantics; a non-nil cutsB selects
+// double-digest semantics even when the second enzyme has zero cuts.
+func DigestCuts(cutsA, cutsB []int, seqLen, min, max int, opt Options) []Fragment {
+	out := make([]Fragment, 0)
+	_ = DigestCutsEach(cutsA, cutsB, seqLen, min, max, opt, func(fr Fragment) error {
+		out = append(out, fr)
+		return nil
+	})
+	return out
 }
 
 // DigestStats returns hard-window fragment counts and bases without constructing
