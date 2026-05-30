@@ -23,7 +23,7 @@ import (
 )
 
 var (
-	version = "v0.2.0"
+	version = "v0.3.0"
 )
 
 const summarySchemaVersion = 1
@@ -306,6 +306,38 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return usageError{err: err}
 	}
 
+	// Resolve the synthetic-genome seed before choosing the execution path so
+	// JSON summaries report the same value in streaming and stats-only modes.
+	resolvedSimSeed := int64(0)
+	if *simLen > 0 {
+		resolvedSimSeed = sim.ResolveSeed(*simSeed)
+	}
+
+	if canUseStatsOnlyJSON(gffOutputPath, fragmentsTSVOutputPath, fragmentsFASTAOutputPath, jsonOutputPath, selector.Config()) {
+		return runStatsOnlyJSON(runStatsOnlyInput{
+			Args:             args,
+			Stdin:            stdin,
+			Stdout:           stdout,
+			Stderr:           stderr,
+			Plan:             plan,
+			Selector:         selector,
+			EnzymeNames:      enzymeNames,
+			FastaPath:        *fastaPath,
+			SimLen:           *simLen,
+			SimGC:            *simGC,
+			SimSeedRequested: *simSeed,
+			SimSeedResolved:  resolvedSimSeed,
+			MinLen:           *minLen,
+			MaxLen:           *maxLen,
+			Threads:          *threads,
+			Verbose:          *verbose,
+			AllowSame:        *allowSame,
+			StrictCuts:       *strictCuts,
+			IncludeEnds:      *includeEnds,
+			JSONPath:         jsonOutputPath,
+		})
+	}
+
 	// ---- start writers -------------------------------------------------------
 	writer, err := collector.NewWriterTo(gffOutputPath, stdout)
 	if err != nil {
@@ -358,11 +390,6 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	}()
 
 	// ---- source: FASTA or synthetic ----------------------------------------
-	resolvedSimSeed := int64(0)
-	if *simLen > 0 {
-		resolvedSimSeed = sim.ResolveSeed(*simSeed)
-	}
-
 	faCh := make(chan fasta.Record)
 	sourceErrCh := make(chan error, 1)
 	go func() {
@@ -438,6 +465,185 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		}
 	}
 	return nil
+}
+
+type statsOnlyResult struct {
+	idx   int
+	chr   string
+	stats digest.Stats
+}
+
+type runStatsOnlyInput struct {
+	Args             []string
+	Stdin            io.Reader
+	Stdout           io.Writer
+	Stderr           io.Writer
+	Plan             digest.Plan
+	Selector         sizeselect.Selector
+	EnzymeNames      []string
+	FastaPath        string
+	SimLen           int
+	SimGC            float64
+	SimSeedRequested int64
+	SimSeedResolved  int64
+	MinLen           int
+	MaxLen           int
+	Threads          int
+	Verbose          bool
+	AllowSame        bool
+	StrictCuts       bool
+	IncludeEnds      bool
+	JSONPath         string
+}
+
+func canUseStatsOnlyJSON(gffPath, fragmentsTSVPath, fragmentsFASTAPath, jsonPath string, cfg sizeselect.Config) bool {
+	return jsonPath != "" &&
+		gffPath == "" &&
+		fragmentsTSVPath == "" &&
+		fragmentsFASTAPath == "" &&
+		cfg.Model == sizeselect.ModelHard &&
+		cfg.ScoreMin == cfg.Min &&
+		cfg.ScoreMax == cfg.Max
+}
+
+func runStatsOnlyJSON(in runStatsOnlyInput) error {
+	type job struct {
+		idx int
+		rec fasta.Record
+	}
+
+	jobs := make(chan job, in.Threads)
+	results := make(chan statsOnlyResult, in.Threads)
+	var wg sync.WaitGroup
+
+	for i := 0; i < in.Threads; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := range jobs {
+				results <- statsOnlyResult{
+					idx:   j.idx,
+					chr:   j.rec.ID,
+					stats: in.Plan.DigestStats(j.rec.Seq, in.MinLen, in.MaxLen),
+				}
+			}
+		}()
+	}
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	faCh := make(chan fasta.Record)
+	sourceErrCh := make(chan error, 1)
+	go func() {
+		if in.SimLen > 0 {
+			seq := sim.Make(in.SimLen, in.SimGC, in.SimSeedResolved)
+			faCh <- fasta.Record{ID: "chr1", Seq: seq}
+			close(faCh)
+			sourceErrCh <- nil
+			return
+		}
+		sourceErrCh <- fasta.StreamFrom(in.FastaPath, in.Stdin, faCh)
+	}()
+	go func() {
+		idx := 0
+		for rec := range faCh {
+			jobs <- job{idx: idx, rec: rec}
+			idx++
+		}
+		close(jobs)
+	}()
+
+	stats, streamErr := collectStatsOnlyResults(results, in.Verbose, in.Stderr)
+	if streamErr != nil {
+		return fmt.Errorf("digest/stats: %w", streamErr)
+	}
+	sourceErr := <-sourceErrCh
+	if sourceErr != nil {
+		return fmt.Errorf("fasta stream: %w", sourceErr)
+	}
+
+	sizeStats := hardSizeStatsFromCollector(in.Selector, stats)
+
+	if _, err := fmt.Fprintf(in.Stderr, "Fragments kept: %d\nBases covered: %d\nChromosomes: %d\n",
+		stats.TotalFragments, stats.TotalBases, len(stats.PerChr)); err != nil {
+		return fmt.Errorf("write final stats: %w", err)
+	}
+
+	summary := buildRunSummary(runSummaryInput{
+		Args:             in.Args,
+		Enzymes:          in.EnzymeNames,
+		FastaPath:        in.FastaPath,
+		SimLen:           in.SimLen,
+		SimGC:            in.SimGC,
+		SimSeedRequested: in.SimSeedRequested,
+		SimSeedResolved:  in.SimSeedResolved,
+		MinLen:           in.MinLen,
+		MaxLen:           in.MaxLen,
+		Threads:          in.Threads,
+		AllowSame:        in.AllowSame,
+		StrictCuts:       in.StrictCuts,
+		IncludeEnds:      in.IncludeEnds,
+		SelectorConfig:   in.Selector.Config(),
+		JSONPath:         in.JSONPath,
+		SizeSelection:    sizeStats,
+		Stats:            stats,
+	})
+	if err := writeSummaryJSONTo(in.JSONPath, summary, in.Stdout); err != nil {
+		return fmt.Errorf("write json: %w", err)
+	}
+	return nil
+}
+
+func collectStatsOnlyResults(results <-chan statsOnlyResult, verbose bool, stderr io.Writer) (collector.Stats, error) {
+	pending := make(map[int]statsOnlyResult)
+	next := 0
+	stats := collector.Stats{PerChr: make(map[string]collector.ChrStats)}
+
+	for results != nil || len(pending) > 0 {
+		if r, ok := pending[next]; ok {
+			if r.stats.Fragments > 0 {
+				chrStats := collector.ChrStats{Fragments: r.stats.Fragments, Bases: r.stats.Bases}
+				stats.PerChr[r.chr] = chrStats
+				stats.TotalFragments += r.stats.Fragments
+				stats.TotalBases += r.stats.Bases
+			}
+			if verbose {
+				if _, err := fmt.Fprintf(stderr, "chr=%s fragments=%d\n", r.chr, r.stats.Fragments); err != nil {
+					return stats, fmt.Errorf("write progress for %s: %w", r.chr, err)
+				}
+			}
+			delete(pending, next)
+			next++
+			continue
+		}
+
+		if results == nil {
+			return stats, fmt.Errorf("missing digest result for chromosome index %d", next)
+		}
+		r, ok := <-results
+		if !ok {
+			results = nil
+			continue
+		}
+		pending[r.idx] = r
+	}
+	return stats, nil
+}
+
+func hardSizeStatsFromCollector(selector sizeselect.Selector, stats collector.Stats) sizeselect.Stats {
+	sizeStats := sizeselect.NewStats(selector)
+	sizeStats.RawFragmentsScored = stats.TotalFragments
+	sizeStats.RawBasesScored = int64(stats.TotalBases)
+	sizeStats.RawFragmentsInWindow = stats.TotalFragments
+	sizeStats.RawBasesInWindow = int64(stats.TotalBases)
+	sizeStats.WeightedFragments = float64(stats.TotalFragments)
+	sizeStats.WeightedBases = float64(stats.TotalBases)
+	if stats.TotalFragments > 0 {
+		sizeStats.MeanWeightedLength = sizeStats.WeightedBases / sizeStats.WeightedFragments
+	}
+	return sizeStats
 }
 
 func writeResultStreams(w *collector.Writer, results <-chan digestResult, verbose bool) error {

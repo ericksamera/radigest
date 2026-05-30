@@ -38,3 +38,35 @@ func TestCompileMaskCheckedRejectsInvalidIUPAC(t *testing.T) {
 		t.Fatalf("CompileMaskChecked returned nil error for invalid IUPAC symbol")
 	}
 }
+
+func TestIsExactACGT(t *testing.T) {
+	if !IsExactACGT("GAATTC") {
+		t.Fatalf("GAATTC should be recognized as an exact A/C/G/T motif")
+	}
+	if !IsExactACGT("gaattc") {
+		t.Fatalf("lowercase exact motifs should be recognized")
+	}
+	if IsExactACGT("GCWGC") {
+		t.Fatalf("degenerate motifs must not use the exact-match scanner")
+	}
+	if IsExactACGT("") {
+		t.Fatalf("empty motif must not be exact")
+	}
+}
+
+func TestBestMaskAnchorPrefersMostSpecificPosition(t *testing.T) {
+	mask := CompileMask("NNACN")
+	if got := BestMaskAnchor(mask); got != 2 {
+		t.Fatalf("best anchor = %d, want 2", got)
+	}
+}
+
+func TestMatchMaskAtUsesAnchorAndReferenceNStillFails(t *testing.T) {
+	mask := CompileMask("NNACN")
+	if !MatchMaskAt(mask, BestMaskAnchor(mask), []byte("GGACA")) {
+		t.Fatalf("expected degenerate motif to match compatible reference")
+	}
+	if MatchMaskAt(mask, BestMaskAnchor(mask), []byte("GGNCG")) {
+		t.Fatalf("reference N must not match even under degenerate motif N")
+	}
+}
