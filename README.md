@@ -239,6 +239,25 @@ scripts/radigest-screen-pairs \
 
 The screen writes one JSON summary per pair under `pair_screen/json/` and logs under `pair_screen/logs/`. It requests only JSON summaries, so GFF, TSV, and FASTA artifact outputs are omitted during initial screening.
 
+For diagnostic timing of the cached pair-screen engine itself, use the compiled benchmark binary. It reports separate cut-index build, pair-scoring, JSON-marshalling, and JSON-writing phases as TSV:
+
+```bash
+radigest-bench-screen-cached \
+  --fasta ref.fa \
+  --enzymes candidate_enzymes.txt \
+  --min 300 \
+  --max 600 \
+  --score-min 1 \
+  --score-max 2000 \
+  --size-model hard \
+  --jobs 4 \
+  --runs 3 \
+  --reuse-index \
+  --output-mode none
+```
+
+Use `--output-mode marshal` to add JSON encoding cost without filesystem writes, or `--output-mode write --out-dir pair_screen_bench --force` to include per-pair JSON file writes.
+
 Rank pairs by weighted bases, or by genome percentage if a FASTA denominator is provided:
 
 ```bash

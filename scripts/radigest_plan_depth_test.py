@@ -8,7 +8,6 @@ import tempfile
 import unittest
 from pathlib import Path
 
-
 SCRIPT = Path(__file__).with_name("radigest-plan-depth")
 HEADER = [
     "rank",
@@ -36,7 +35,9 @@ def run_plan(
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "ranked.tsv"
         with path.open("w", newline="") as handle:
-            writer = csv.DictWriter(handle, fieldnames=HEADER, delimiter="\t", lineterminator="\n")
+            writer = csv.DictWriter(
+                handle, fieldnames=HEADER, delimiter="\t", lineterminator="\n"
+            )
             writer.writeheader()
             writer.writerow(row)
         cmd = [
@@ -80,7 +81,9 @@ class PlanDepthTest(unittest.TestCase):
         }
 
     def test_samples_depth_and_target_are_solved(self) -> None:
-        out = run_plan(self.base_row(), "--samples", "96", "--target-genome-pct", "1.25")
+        out = run_plan(
+            self.base_row(), "--samples", "96", "--target-genome-pct", "1.25"
+        )
         self.assertEqual(out["read_pairs_per_sample"], "2500000.000000")
         self.assertEqual(out["mean_depth_full_target"], "25.000000")
         self.assertEqual(out["full_target_passes_depth"], "true")
@@ -91,7 +94,9 @@ class PlanDepthTest(unittest.TestCase):
         self.assertEqual(out["target_fraction_of_weighted_target"], "0.500000")
         self.assertEqual(out["target_weighted_fragments"], "50000.000000")
         self.assertEqual(out["max_samples_per_lane_for_target"], "480")
-        self.assertEqual(out["mean_insert_category"], "mean_lt_2_read_lengths_overlap_risk")
+        self.assertEqual(
+            out["mean_insert_category"], "mean_lt_2_read_lengths_overlap_risk"
+        )
 
     def test_capacity_mode_without_samples_reports_max_samples(self) -> None:
         out = run_plan(self.base_row(), "--target-genome-pct", "1.25")
