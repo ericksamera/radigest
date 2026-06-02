@@ -213,10 +213,6 @@ func compileCutPlans(enzymes []enzyme.Enzyme, opt digest.Options) ([]string, []d
 	return names, plans, nil
 }
 
-func scanRecordCuts(rec fasta.Record, names []string, plans []digest.Plan) (RecordCuts, error) {
-	return scanRecordCutsWithWorkers(rec, names, plans, 1)
-}
-
 func scanRecordCutsWithWorkers(rec fasta.Record, names []string, plans []digest.Plan, workers int) (RecordCuts, error) {
 	if rec.ID == "" {
 		return RecordCuts{}, fmt.Errorf("screen cut index: record with empty ID")
