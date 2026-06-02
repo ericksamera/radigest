@@ -25,6 +25,7 @@ func TestRunWritesPhaseTimingTSV(t *testing.T) {
 		"--score-max", "100",
 		"--size-model", "hard",
 		"--jobs", "2",
+		"--build-workers", "2",
 		"--runs", "1",
 		"--output-mode", "marshal",
 	}, &stdout, &stderr)
@@ -47,6 +48,9 @@ func TestRunWritesPhaseTimingTSV(t *testing.T) {
 	}
 	if rows[1][header["candidate_pairs"]] != "3" {
 		t.Fatalf("candidate_pairs = %s, want 3", rows[1][header["candidate_pairs"]])
+	}
+	if rows[1][header["build_workers"]] != "2" {
+		t.Fatalf("build_workers = %s, want 2", rows[1][header["build_workers"]])
 	}
 	if rows[1][header["summaries"]] != "3" {
 		t.Fatalf("summaries = %s, want 3", rows[1][header["summaries"]])

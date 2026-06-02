@@ -251,12 +251,13 @@ radigest-bench-screen-cached \
   --score-max 2000 \
   --size-model hard \
   --jobs 4 \
+  --build-workers 4 \
   --runs 3 \
   --reuse-index \
   --output-mode none
 ```
 
-Use `--output-mode marshal` to add JSON encoding cost without filesystem writes, or `--output-mode write --out-dir pair_screen_bench --force` to include per-pair JSON file writes.
+Use `--build-workers` to control parallel cut-index construction; when omitted, cached screening defaults it from `--jobs` and then `--threads`. Set `--build-workers 1` to reproduce the older serial cache-build behavior. Use `--output-mode marshal` to add JSON encoding cost without filesystem writes, or `--output-mode write --out-dir pair_screen_bench --force` to include per-pair JSON file writes.
 
 Rank pairs by weighted bases, or by genome percentage if a FASTA denominator is provided:
 

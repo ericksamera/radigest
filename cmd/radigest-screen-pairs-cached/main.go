@@ -93,6 +93,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	sizeEdgeSD := fs.Float64("size-edge-sd", 25, "edge softness for -size-model soft-window")
 	jobsFlag := fs.Int("jobs", 0, "parallel pair-scoring workers (default: -threads)")
 	threadsFlag := fs.Int("threads", runtime.NumCPU(), "worker count alias used when -jobs is not set")
+	buildWorkersFlag := fs.Int("build-workers", 0, "parallel cut-index build workers (default: --jobs, then --threads); scans candidate enzymes concurrently per FASTA record")
 	allowSame := fs.Bool("allow-same", false, "double digest: also keep AA/BB neighbors (default AB/BA only)")
 	includeEnds := fs.Bool("include-ends", false, "also score terminal fragments from contig ends to nearest cut")
 	strictCuts := fs.Bool("strict-cuts", false, "error if an enzyme lacks a caret and CutIndex==0")
@@ -129,6 +130,9 @@ func run(args []string, stdout, stderr io.Writer) error {
 	if *minLen < 0 || *maxLen < *minLen {
 		return usageError{err: fmt.Errorf("invalid hard size window: min=%d max=%d", *minLen, *maxLen)}
 	}
+	if *buildWorkersFlag < 0 {
+		return usageError{err: fmt.Errorf("--build-workers must be >= 0 (got %d)", *buildWorkersFlag)}
+	}
 
 	enzymeNames, err := readEnzymeNames(*enzFlag)
 	if err != nil {
@@ -139,6 +143,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	pairJobs := buildPairJobs(enzymeNames, *outDir, *force, *maxPairs)
+	workers := resolvePairWorkers(*jobsFlag, *threadsFlag, len(pairJobs))
+	buildWorkers := resolveBuildWorkers(*buildWorkersFlag, *jobsFlag, *threadsFlag, len(enzymeNames))
 	if _, err := fmt.Fprintf(stderr, "candidate_enzymes\t%d\n", len(enzymeNames)); err != nil {
 		return err
 	}
@@ -171,8 +177,11 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 
-	index, err := screen.BuildCutIndexFromFASTA(*fastaPath, enzymes, digest.Options{StrictCuts: *strictCuts})
+	index, err := screen.BuildCutIndexFromFASTAParallel(*fastaPath, enzymes, digest.Options{StrictCuts: *strictCuts}, buildWorkers)
 	if err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(stderr, "build_workers\t%d\n", buildWorkers); err != nil {
 		return err
 	}
 	if _, err := fmt.Fprintf(stderr, "records\t%d\n", len(index.Records)); err != nil {
@@ -183,17 +192,6 @@ func run(args []string, stdout, stderr io.Writer) error {
 	}
 	if _, err := fmt.Fprintf(stderr, "cache_memory_estimate_bytes\t%d\n", index.CacheMemoryEstimateBytes()); err != nil {
 		return err
-	}
-
-	workers := *jobsFlag
-	if workers <= 0 {
-		workers = *threadsFlag
-	}
-	if workers <= 0 {
-		workers = 1
-	}
-	if workers > len(pairJobs) {
-		workers = len(pairJobs)
 	}
 
 	opt := digest.Options{
@@ -260,6 +258,43 @@ func lookupEnzymes(names []string) ([]enzyme.Enzyme, error) {
 		out = append(out, enz)
 	}
 	return out, nil
+}
+
+func resolvePairWorkers(jobs, threads, pairCount int) int {
+	workers := jobs
+	if workers <= 0 {
+		workers = threads
+	}
+	if workers <= 0 {
+		workers = 1
+	}
+	if pairCount > 0 && workers > pairCount {
+		workers = pairCount
+	}
+	if workers <= 0 {
+		workers = 1
+	}
+	return workers
+}
+
+func resolveBuildWorkers(buildWorkers, jobs, threads, enzymeCount int) int {
+	workers := buildWorkers
+	if workers <= 0 {
+		workers = jobs
+	}
+	if workers <= 0 {
+		workers = threads
+	}
+	if workers <= 0 {
+		workers = 1
+	}
+	if enzymeCount > 0 && workers > enzymeCount {
+		workers = enzymeCount
+	}
+	if workers <= 0 {
+		workers = 1
+	}
+	return workers
 }
 
 func buildPairJobs(enzymeNames []string, outDir string, force bool, maxPairs int) []pairJob {

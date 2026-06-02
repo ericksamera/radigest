@@ -42,32 +42,33 @@ const (
 )
 
 type benchConfig struct {
-	fastaPath   string
-	enzFlag     string
-	outDir      string
-	minLen      int
-	maxLen      int
-	scoreMin    int
-	scoreMax    int
-	sizeModel   string
-	sizeMean    float64
-	sizeSD      float64
-	sizeEdgeSD  float64
-	jobs        int
-	threads     int
-	runs        int
-	maxPairs    int
-	allowSame   bool
-	includeEnds bool
-	strictCuts  bool
-	reuseIndex  bool
-	mode        outputMode
-	indentJSON  bool
-	syncJSON    bool
-	writeLogs   bool
-	force       bool
-	showVersion bool
-	help        bool
+	fastaPath    string
+	enzFlag      string
+	outDir       string
+	minLen       int
+	maxLen       int
+	scoreMin     int
+	scoreMax     int
+	sizeModel    string
+	sizeMean     float64
+	sizeSD       float64
+	sizeEdgeSD   float64
+	jobs         int
+	threads      int
+	buildWorkers int
+	runs         int
+	maxPairs     int
+	allowSame    bool
+	includeEnds  bool
+	strictCuts   bool
+	reuseIndex   bool
+	mode         outputMode
+	indentJSON   bool
+	syncJSON     bool
+	writeLogs    bool
+	force        bool
+	showVersion  bool
+	help         bool
 }
 
 type benchRun struct {
@@ -76,6 +77,7 @@ type benchRun struct {
 	CandidatePairs           int     `json:"candidate_pairs"`
 	Jobs                     int     `json:"jobs"`
 	GOMAXPROCS               int     `json:"gomaxprocs"`
+	BuildWorkers             int     `json:"build_workers"`
 	Records                  int     `json:"records"`
 	CachedCutSites           int     `json:"cached_cut_sites"`
 	CacheMemoryEstimateBytes int64   `json:"cache_memory_estimate_bytes"`
@@ -157,11 +159,13 @@ func run(args []string, stdout, stderr io.Writer) error {
 		StrictCuts:  cfg.strictCuts,
 	}
 
+	buildWorkers := resolveBuildWorkers(cfg.buildWorkers, cfg.jobs, cfg.threads, len(enzymes))
+
 	var reusedIndex screen.CutIndex
 	var reusedBuildSeconds float64
 	if cfg.reuseIndex {
 		start := time.Now()
-		idx, err := screen.BuildCutIndexFromFASTA(cfg.fastaPath, enzymes, digest.Options{StrictCuts: cfg.strictCuts})
+		idx, err := screen.BuildCutIndexFromFASTAParallel(cfg.fastaPath, enzymes, digest.Options{StrictCuts: cfg.strictCuts}, buildWorkers)
 		if err != nil {
 			return err
 		}
@@ -179,7 +183,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	}
 
 	for runID := 1; runID <= cfg.runs; runID++ {
-		result, err := runBenchmarkOnce(runID, cfg, enzymes, selector, opt, reusedIndex, cfg.reuseIndex, reusedBuildSeconds)
+		result, err := runBenchmarkOnce(runID, cfg, enzymes, selector, opt, reusedIndex, cfg.reuseIndex, reusedBuildSeconds, buildWorkers)
 		if err != nil {
 			return err
 		}
@@ -213,6 +217,7 @@ func parseArgs(args []string, stderr io.Writer) (benchConfig, error) {
 	fs.Float64Var(&cfg.sizeEdgeSD, "size-edge-sd", 25, "edge softness for --size-model soft-window")
 	fs.IntVar(&cfg.jobs, "jobs", 0, "parallel pair-scoring workers (default: --threads)")
 	fs.IntVar(&cfg.threads, "threads", runtime.NumCPU(), "worker count alias used when --jobs is not set")
+	fs.IntVar(&cfg.buildWorkers, "build-workers", 0, "parallel cut-index build workers (default: --jobs, then --threads); scans candidate enzymes concurrently per FASTA record")
 	fs.IntVar(&cfg.runs, "runs", 1, "number of benchmark repetitions")
 	fs.IntVar(&cfg.maxPairs, "max-pairs", 0, "maximum number of pairs to score; 0 means all pairs")
 	fs.BoolVar(&cfg.allowSame, "allow-same", false, "double digest: also keep AA/BB neighbors (default AB/BA only)")
@@ -259,6 +264,9 @@ func parseArgs(args []string, stderr io.Writer) (benchConfig, error) {
 	if cfg.runs < 1 {
 		return cfg, usageError{err: fmt.Errorf("--runs must be >= 1 (got %d)", cfg.runs)}
 	}
+	if cfg.buildWorkers < 0 {
+		return cfg, usageError{err: fmt.Errorf("--build-workers must be >= 0 (got %d)", cfg.buildWorkers)}
+	}
 	if cfg.maxPairs < 0 {
 		return cfg, usageError{err: fmt.Errorf("--max-pairs must be >= 0 (got %d)", cfg.maxPairs)}
 	}
@@ -272,7 +280,7 @@ func parseArgs(args []string, stderr io.Writer) (benchConfig, error) {
 	return cfg, nil
 }
 
-func runBenchmarkOnce(runID int, cfg benchConfig, enzymes []enzyme.Enzyme, selector sizeselect.Selector, opt digest.Options, reusedIndex screen.CutIndex, reuseIndex bool, reusedBuildSeconds float64) (benchRun, error) {
+func runBenchmarkOnce(runID int, cfg benchConfig, enzymes []enzyme.Enzyme, selector sizeselect.Selector, opt digest.Options, reusedIndex screen.CutIndex, reuseIndex bool, reusedBuildSeconds float64, buildWorkers int) (benchRun, error) {
 	totalStart := time.Now()
 
 	idx := reusedIndex
@@ -280,7 +288,7 @@ func runBenchmarkOnce(runID int, cfg benchConfig, enzymes []enzyme.Enzyme, selec
 	if !reuseIndex {
 		start := time.Now()
 		var err error
-		idx, err = screen.BuildCutIndexFromFASTA(cfg.fastaPath, enzymes, digest.Options{StrictCuts: cfg.strictCuts})
+		idx, err = screen.BuildCutIndexFromFASTAParallel(cfg.fastaPath, enzymes, digest.Options{StrictCuts: cfg.strictCuts}, buildWorkers)
 		if err != nil {
 			return benchRun{}, err
 		}
@@ -330,6 +338,7 @@ func runBenchmarkOnce(runID int, cfg benchConfig, enzymes []enzyme.Enzyme, selec
 	result.TotalSeconds = time.Since(totalStart).Seconds()
 	result.Jobs = workers
 	result.GOMAXPROCS = runtime.GOMAXPROCS(0)
+	result.BuildWorkers = buildWorkers
 	result.OutputMode = string(cfg.mode)
 	result.SyncJSON = cfg.syncJSON
 	result.WriteLogs = cfg.writeLogs
@@ -354,6 +363,26 @@ func resolveWorkers(jobs, threads, pairCount int) int {
 	}
 	if pairCount > 0 && workers > pairCount {
 		workers = pairCount
+	}
+	if workers <= 0 {
+		workers = 1
+	}
+	return workers
+}
+
+func resolveBuildWorkers(buildWorkers, jobs, threads, enzymeCount int) int {
+	workers := buildWorkers
+	if workers <= 0 {
+		workers = jobs
+	}
+	if workers <= 0 {
+		workers = threads
+	}
+	if workers <= 0 {
+		workers = 1
+	}
+	if enzymeCount > 0 && workers > enzymeCount {
+		workers = enzymeCount
 	}
 	if workers <= 0 {
 		workers = 1
@@ -617,6 +646,7 @@ func benchHeader() []string {
 		"candidate_pairs",
 		"jobs",
 		"gomaxprocs",
+		"build_workers",
 		"records",
 		"cached_cut_sites",
 		"cache_memory_estimate_bytes",
@@ -646,6 +676,7 @@ func (r benchRun) tsvRow() []string {
 		strconv.Itoa(r.CandidatePairs),
 		strconv.Itoa(r.Jobs),
 		strconv.Itoa(r.GOMAXPROCS),
+		strconv.Itoa(r.BuildWorkers),
 		strconv.Itoa(r.Records),
 		strconv.Itoa(r.CachedCutSites),
 		strconv.FormatInt(r.CacheMemoryEstimateBytes, 10),
