@@ -27,6 +27,7 @@ func TestRunCachedScreenWritesRankablePairJSON(t *testing.T) {
 		"--size-model", "hard",
 		"--out-dir", outDir,
 		"--jobs", "1",
+		"--build-workers", "2",
 	}, &stdout, &stderr)
 	if err != nil {
 		t.Fatalf("run() error = %v\nstderr:\n%s", err, stderr.String())

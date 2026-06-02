@@ -183,6 +183,68 @@ CCCCCCCC
 	}
 }
 
+func TestBuildCutIndexParallelMatchesBuildCutIndex(t *testing.T) {
+	got, err := BuildCutIndexParallel(testRecords(), testEnzymes(), digest.Options{}, 4)
+	if err != nil {
+		t.Fatalf("BuildCutIndexParallel returned error: %v", err)
+	}
+	want, err := BuildCutIndex(testRecords(), testEnzymes(), digest.Options{})
+	if err != nil {
+		t.Fatalf("BuildCutIndex returned error: %v", err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("parallel cut index got %#v want %#v", got, want)
+	}
+}
+
+func TestBuildCutIndexFromRecordsParallelMatchesBuildCutIndex(t *testing.T) {
+	records := testRecords()
+	ch := make(chan fasta.Record)
+	go func() {
+		defer close(ch)
+		for _, rec := range records {
+			ch <- rec
+		}
+	}()
+
+	got, err := BuildCutIndexFromRecordsParallel(ch, testEnzymes(), digest.Options{}, 4)
+	if err != nil {
+		t.Fatalf("BuildCutIndexFromRecordsParallel returned error: %v", err)
+	}
+	want, err := BuildCutIndex(records, testEnzymes(), digest.Options{})
+	if err != nil {
+		t.Fatalf("BuildCutIndex returned error: %v", err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("parallel streamed cut index got %#v want %#v", got, want)
+	}
+}
+
+func TestBuildCutIndexFromFASTAParallelMatchesBuildCutIndex(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "records.fa")
+	data := []byte(`>toy
+AAAAGAATTCTTAAAGAATTCTTT
+>nocut
+CCCCCCCC
+`)
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("write FASTA: %v", err)
+	}
+
+	got, err := BuildCutIndexFromFASTAParallel(path, testEnzymes(), digest.Options{}, 4)
+	if err != nil {
+		t.Fatalf("BuildCutIndexFromFASTAParallel returned error: %v", err)
+	}
+	want, err := BuildCutIndex(testRecords(), testEnzymes(), digest.Options{})
+	if err != nil {
+		t.Fatalf("BuildCutIndex returned error: %v", err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("parallel FASTA-streamed cut index got %#v want %#v", got, want)
+	}
+}
+
 func TestBuildCutIndexCachesExpectedCuts(t *testing.T) {
 	idx, err := BuildCutIndex(testRecords(), testEnzymes(), digest.Options{})
 	if err != nil {

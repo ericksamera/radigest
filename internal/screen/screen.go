@@ -13,7 +13,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"runtime"
 	"strconv"
+	"sync"
 
 	"github.com/ericksamera/radigest/internal/digest"
 	"github.com/ericksamera/radigest/internal/enzyme"
@@ -80,10 +82,19 @@ type Pair struct {
 // BuildCutIndexFromFASTA or BuildCutIndexFromRecords so sequence bytes can be
 // discarded after each record is scanned.
 func BuildCutIndex(records []fasta.Record, enzymes []enzyme.Enzyme, opt digest.Options) (CutIndex, error) {
+	return BuildCutIndexParallel(records, enzymes, opt, 1)
+}
+
+// BuildCutIndexParallel is like BuildCutIndex, but scans candidate enzymes
+// concurrently within each FASTA record. It preserves input record order and
+// retains only one record sequence at a time while its enzyme cut streams are
+// being constructed. A workers value <= 0 uses runtime.NumCPU().
+func BuildCutIndexParallel(records []fasta.Record, enzymes []enzyme.Enzyme, opt digest.Options, workers int) (CutIndex, error) {
 	names, plans, err := compileCutPlans(enzymes, opt)
 	if err != nil {
 		return CutIndex{}, err
 	}
+	workers = normalizeBuildWorkers(workers, len(plans))
 
 	idx := CutIndex{
 		Records:     make([]RecordCuts, 0, len(records)),
@@ -91,7 +102,7 @@ func BuildCutIndex(records []fasta.Record, enzymes []enzyme.Enzyme, opt digest.O
 	}
 
 	for _, rec := range records {
-		rc, err := scanRecordCuts(rec, names, plans)
+		rc, err := scanRecordCutsWithWorkers(rec, names, plans, workers)
 		if err != nil {
 			return CutIndex{}, err
 		}
@@ -105,6 +116,14 @@ func BuildCutIndex(records []fasta.Record, enzymes []enzyme.Enzyme, opt digest.O
 // IDs, record lengths, and per-enzyme cut coordinates. Sequence bytes are not
 // retained after each record has been scanned.
 func BuildCutIndexFromRecords(records <-chan fasta.Record, enzymes []enzyme.Enzyme, opt digest.Options) (CutIndex, error) {
+	return BuildCutIndexFromRecordsParallel(records, enzymes, opt, 1)
+}
+
+// BuildCutIndexFromRecordsParallel is like BuildCutIndexFromRecords, but it can
+// scan multiple enzyme cut streams for each record concurrently. Record order in
+// the returned index remains the same as input FASTA order. A workers value <= 0
+// uses runtime.NumCPU().
+func BuildCutIndexFromRecordsParallel(records <-chan fasta.Record, enzymes []enzyme.Enzyme, opt digest.Options, workers int) (CutIndex, error) {
 	if records == nil {
 		return CutIndex{}, fmt.Errorf("screen cut index: records channel is nil")
 	}
@@ -113,6 +132,7 @@ func BuildCutIndexFromRecords(records <-chan fasta.Record, enzymes []enzyme.Enzy
 	if err != nil {
 		return CutIndex{}, err
 	}
+	workers = normalizeBuildWorkers(workers, len(plans))
 
 	idx := CutIndex{
 		Records:     make([]RecordCuts, 0),
@@ -120,7 +140,7 @@ func BuildCutIndexFromRecords(records <-chan fasta.Record, enzymes []enzyme.Enzy
 	}
 
 	for rec := range records {
-		rc, err := scanRecordCuts(rec, names, plans)
+		rc, err := scanRecordCutsWithWorkers(rec, names, plans, workers)
 		if err != nil {
 			return CutIndex{}, err
 		}
@@ -134,13 +154,20 @@ func BuildCutIndexFromRecords(records <-chan fasta.Record, enzymes []enzyme.Enzy
 // retaining full reference sequences. This is the preferred entry point for
 // cached pair-screening commands on large genomes.
 func BuildCutIndexFromFASTA(path string, enzymes []enzyme.Enzyme, opt digest.Options) (CutIndex, error) {
+	return BuildCutIndexFromFASTAParallel(path, enzymes, opt, 1)
+}
+
+// BuildCutIndexFromFASTAParallel is like BuildCutIndexFromFASTA, but scans each
+// record's candidate enzymes with up to workers goroutines. A workers value <= 0
+// uses runtime.NumCPU().
+func BuildCutIndexFromFASTAParallel(path string, enzymes []enzyme.Enzyme, opt digest.Options, workers int) (CutIndex, error) {
 	ch := make(chan fasta.Record)
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- fasta.Stream(path, ch)
 	}()
 
-	idx, buildErr := BuildCutIndexFromRecords(ch, enzymes, opt)
+	idx, buildErr := BuildCutIndexFromRecordsParallel(ch, enzymes, opt, workers)
 	if buildErr != nil {
 		for range ch {
 			// Drain the FASTA stream so fasta.Stream can return its error and the
@@ -187,6 +214,10 @@ func compileCutPlans(enzymes []enzyme.Enzyme, opt digest.Options) ([]string, []d
 }
 
 func scanRecordCuts(rec fasta.Record, names []string, plans []digest.Plan) (RecordCuts, error) {
+	return scanRecordCutsWithWorkers(rec, names, plans, 1)
+}
+
+func scanRecordCutsWithWorkers(rec fasta.Record, names []string, plans []digest.Plan, workers int) (RecordCuts, error) {
 	if rec.ID == "" {
 		return RecordCuts{}, fmt.Errorf("screen cut index: record with empty ID")
 	}
@@ -195,10 +226,57 @@ func scanRecordCuts(rec fasta.Record, names []string, plans []digest.Plan) (Reco
 		Length: len(rec.Seq),
 		Cuts:   make(map[string][]int, len(names)),
 	}
-	for i, plan := range plans {
-		rc.Cuts[names[i]] = plan.Cuts(rec.Seq)
+	workers = normalizeBuildWorkers(workers, len(plans))
+	if workers == 1 || len(plans) <= 1 {
+		for i, plan := range plans {
+			rc.Cuts[names[i]] = plan.Cuts(rec.Seq)
+		}
+		return rc, nil
+	}
+
+	type result struct {
+		idx  int
+		cuts []int
+	}
+	jobs := make(chan int)
+	results := make(chan result, len(plans))
+	var wg sync.WaitGroup
+	for workerID := 0; workerID < workers; workerID++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range jobs {
+				results <- result{idx: i, cuts: plans[i].Cuts(rec.Seq)}
+			}
+		}()
+	}
+	for i := range plans {
+		jobs <- i
+	}
+	close(jobs)
+	wg.Wait()
+	close(results)
+
+	for res := range results {
+		rc.Cuts[names[res.idx]] = res.cuts
 	}
 	return rc, nil
+}
+
+func normalizeBuildWorkers(workers int, planCount int) int {
+	if workers < 1 {
+		workers = runtime.NumCPU()
+	}
+	if workers < 1 {
+		workers = 1
+	}
+	if planCount > 0 && workers > planCount {
+		workers = planCount
+	}
+	if workers < 1 {
+		workers = 1
+	}
+	return workers
 }
 
 // ContainsEnzyme reports whether the cut index includes name.

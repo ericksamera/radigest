@@ -239,6 +239,26 @@ scripts/radigest-screen-pairs \
 
 The screen writes one JSON summary per pair under `pair_screen/json/` and logs under `pair_screen/logs/`. It requests only JSON summaries, so GFF, TSV, and FASTA artifact outputs are omitted during initial screening.
 
+For diagnostic timing of the cached pair-screen engine itself, use the compiled benchmark binary. It reports separate cut-index build, pair-scoring, JSON-marshalling, and JSON-writing phases as TSV:
+
+```bash
+radigest-bench-screen-cached \
+  --fasta ref.fa \
+  --enzymes candidate_enzymes.txt \
+  --min 300 \
+  --max 600 \
+  --score-min 1 \
+  --score-max 2000 \
+  --size-model hard \
+  --jobs 4 \
+  --build-workers 4 \
+  --runs 3 \
+  --reuse-index \
+  --output-mode none
+```
+
+Use `--build-workers` to control parallel cut-index construction; when omitted, cached screening defaults it from `--jobs` and then `--threads`. Set `--build-workers 1` to reproduce the older serial cache-build behavior. Use `--output-mode marshal` to add JSON encoding cost without filesystem writes, or `--output-mode write --out-dir pair_screen_bench --force` to include per-pair JSON file writes.
+
 Rank pairs by weighted bases, or by genome percentage if a FASTA denominator is provided:
 
 ```bash
@@ -259,6 +279,42 @@ scripts/radigest-rank-pairs 'pair_screen/json/*.json' \
   --objective closest-target \
   --target-genome-pct 2.5 \
   --out pair_screen/ranked_pairs.closest_2.5pct.tsv
+
+# Reuse a known non-N genome denominator without rereading the FASTA
+GENOME_BASES=2643888753
+scripts/radigest-rank-pairs 'pair_screen/json/*.json' \
+  --genome-bases "$GENOME_BASES" \
+  --objective closest-target \
+  --target-genome-pct 1.5 \
+  --out pair_screen/ranked_pairs.closest_1.5pct.tsv
 ```
 
 The ranked TSV includes `weighted_bases`, `weighted_fragments`, `raw_bases_in_window`, `raw_fragments_in_window`, `mean_weighted_length`, and genome-percentage columns when a denominator is supplied.
+
+Plan sequencing depth and multiplexing from the ranked TSV:
+
+```bash
+scripts/radigest-plan-depth pair_screen/ranked_pairs.genome_pct.tsv \
+  --read-layout pe \
+  --read-length 150 \
+  --lane-read-pairs 300M \
+  --lanes 1 \
+  --usable-read-fraction 0.85 \
+  --samples 96 \
+  --desired-depth 10 \
+  --target-genome-pct 2.5 \
+  --out pair_screen/depth_plan.tsv
+
+# MiSeq-style one-flowcell budget
+scripts/radigest-plan-depth pair_screen/ranked_pairs.genome_pct.tsv \
+  --read-layout pe \
+  --read-length 150 \
+  --flowcell-read-pairs 50M \
+  --usable-read-fraction 0.85 \
+  --samples 37 \
+  --desired-depth 30 \
+  --target-genome-pct 1.5 \
+  --out pair_screen/depth_plan.flowcell.tsv
+```
+
+This first-pass planner treats `weighted_fragments` as the number of recovered loci competing for reads. `--desired-depth` is a mean read-pair depth per recovered locus, not a callable-depth distribution model or basewise WGS depth. It reports expected mean depth over the full weighted target, the genome percentage supported at the requested depth for a planned sample count, and the number of samples supportable per lane, flowcell, or run for a target genome percentage. It does not model per-locus depth dispersion.
