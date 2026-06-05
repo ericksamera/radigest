@@ -31,6 +31,9 @@ go.work.sum
 
 *.go.txt
 *codebase*
+
+*.pyc
+
 # radigest pair-screen outputs
 pair_screen/
 bin/
