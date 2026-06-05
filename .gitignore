@@ -33,4 +33,5 @@ go.work.sum
 *codebase*
 # radigest pair-screen outputs
 pair_screen/
+radigest_design/
 bin/

@@ -318,3 +318,38 @@ scripts/radigest-plan-depth pair_screen/ranked_pairs.genome_pct.tsv \
 ```
 
 This first-pass planner treats `weighted_fragments` as the number of recovered loci competing for reads. `--desired-depth` is a mean read-pair depth per recovered locus, not a callable-depth distribution model or basewise WGS depth. It reports expected mean depth over the full weighted target, the genome percentage supported at the requested depth for a planned sample count, and the number of samples supportable per lane, flowcell, or run for a target genome percentage. It does not model per-locus depth dispersion.
+
+---
+
+## Inverse enzyme-pair design
+
+Use `radigest-design-pairs` when the experimental design target is known and the enzyme pair is the unknown. The command screens candidate enzyme pairs with the cached cut-index engine, computes weighted recovered genome percentage, combines each pair with a sequencing budget, and ranks pairs by modeled fit to the requested genome fraction and mean read-pair depth.
+
+```bash
+radigest-design-pairs \
+  --fasta ref.fa \
+  --enzymes candidate_enzymes.txt \
+  --target-genome-pct 2.5 \
+  --coverage-tolerance-pct 0.25 \
+  --desired-depth 10 \
+  --samples 96 \
+  --read-layout pe \
+  --read-length 150 \
+  --lane-read-pairs 300M \
+  --lanes 1 \
+  --usable-read-fraction 0.85 \
+  --min 300 \
+  --max 600 \
+  --score-min 1 \
+  --score-max 2000 \
+  --size-model normal \
+  --size-mean 275 \
+  --size-sd 85 \
+  --out-dir radigest_design
+```
+
+The command writes `design_pairs.tsv` and `design_pairs.json`. The TSV is the primary review table; it includes `feasible`, `decision_reason`, `design_score`, generated weighted genome percentage, expected mean depth, depth shortfall, sequencing-budget columns, insert-size diagnostics, and cached-screening provenance. The JSON records the full command, digest parameters, reference denominator, sequencing budget, scoring weights, warnings, and ranked results for reproducibility.
+
+The default `--objective balanced` prioritizes pairs that both match the requested weighted genome percentage within `--coverage-tolerance-pct` and meet `--desired-depth` for the planned sample count. Other objectives are available for sensitivity checks: `closest-coverage`, `depth-first`, `feasible-lowest-coverage`, and `max-depth`.
+
+This inverse-design command is still a sequence-level model. It does not model methylation sensitivity, partial digestion, star activity, enzyme efficiency, buffer compatibility, empirical digestion rates, or per-locus depth dispersion.
