@@ -244,8 +244,36 @@ func TestRunMissingRequiredFlagsReturnsUsageError(t *testing.T) {
 	if exitCode(err) != 2 {
 		t.Fatalf("expected usage exit code 2, got %d for %v", exitCode(err), err)
 	}
-	if !strings.Contains(stderr.String(), "Required flags:") {
+	if !strings.Contains(stderr.String(), "Required inputs:") {
 		t.Fatalf("stderr missing usage text: %q", stderr.String())
+	}
+}
+
+func TestRunHelpShowsGroupedSizeModelHelp(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	err := run([]string{"-help"}, strings.NewReader(""), &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("help returned error: %v", err)
+	}
+	help := stderr.String()
+	for _, needle := range []string{
+		"radigest\n",
+		"Author:  Gennerick J. Samera (erick.samera@kpu.ca)",
+		"Version: " + version,
+		"License: MIT",
+		"Description: deterministic in-silico restriction digest",
+		"Required inputs:",
+		"Digest behavior:",
+		"Size filtering and scoring:",
+		"Size-selection models:",
+		"normal",
+		"triangular",
+		"soft-window",
+		"Outputs:",
+	} {
+		if !strings.Contains(help, needle) {
+			t.Fatalf("help missing %q; help:\n%s", needle, help)
+		}
 	}
 }
 

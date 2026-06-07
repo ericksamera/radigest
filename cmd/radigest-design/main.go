@@ -35,6 +35,7 @@ type cliConfig struct {
 	enzFlag              string
 	outDir               string
 	tsvPath              string
+	summaryTSVPath       string
 	jsonPath             string
 	denominator          string
 	genomeBases          int64
@@ -104,8 +105,9 @@ type runSummary struct {
 }
 
 type outputSummary struct {
-	TSV  string `json:"tsv"`
-	JSON string `json:"json"`
+	TSV        string `json:"tsv"`
+	SummaryTSV string `json:"summary_tsv"`
+	JSON       string `json:"json"`
 }
 
 type designReport struct {
@@ -285,13 +287,16 @@ func run(args []string, stdout, stderr io.Writer) error {
 		warnings = append(warnings, "no candidate pairs were scored")
 	}
 
-	tsvPath, jsonPath := resolveOutputPaths(cfg)
-	if err := ensureOutputPaths(tsvPath, jsonPath, cfg.force); err != nil {
+	tsvPath, summaryTSVPath, jsonPath := resolveOutputPaths(cfg)
+	if err := ensureOutputPaths(tsvPath, summaryTSVPath, jsonPath, cfg.force); err != nil {
 		return err
 	}
 
-	report := buildReport(args, cfg, idx, refBases, genomeBases, selector.Config(), budget, target, weights, warnings, candidates, reported, tsvPath, jsonPath)
+	report := buildReport(args, cfg, idx, refBases, genomeBases, selector.Config(), budget, target, weights, warnings, candidates, reported, tsvPath, summaryTSVPath, jsonPath)
 	if err := writeCandidatesTSV(tsvPath, report.Results); err != nil {
+		return err
+	}
+	if err := writeCandidateSummaryTSV(summaryTSVPath, report.Results); err != nil {
 		return err
 	}
 	if err := writeJSONAtomic(jsonPath, report); err != nil {
@@ -299,6 +304,9 @@ func run(args []string, stdout, stderr io.Writer) error {
 	}
 
 	if _, err := fmt.Fprintf(stderr, "design_tsv\t%s\n", tsvPath); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(stderr, "design_summary_tsv\t%s\n", summaryTSVPath); err != nil {
 		return err
 	}
 	if _, err := fmt.Fprintf(stderr, "design_json\t%s\n", jsonPath); err != nil {
@@ -317,8 +325,9 @@ func parseArgs(args []string, stderr io.Writer) (cliConfig, error) {
 	fs.StringVar(&cfg.fastaPath, "fasta", "", "reference FASTA file")
 	fs.StringVar(&cfg.fastaPath, "ref", "", "alias for --fasta")
 	fs.StringVar(&cfg.enzFlag, "enzymes", "", "comma-separated enzymes, a file with enzyme names, or 'all'")
-	fs.StringVar(&cfg.outDir, "out-dir", "radigest_design", "output directory for design.tsv and design.json")
-	fs.StringVar(&cfg.tsvPath, "tsv", "", "explicit output TSV path; default <out-dir>/design.tsv")
+	fs.StringVar(&cfg.outDir, "out-dir", "radigest_design", "output directory for design.tsv, design.summary.tsv, and design.json")
+	fs.StringVar(&cfg.tsvPath, "tsv", "", "explicit full output TSV path; default <out-dir>/design.tsv")
+	fs.StringVar(&cfg.summaryTSVPath, "summary-tsv", "", "explicit compact summary TSV path; default <out-dir>/design.summary.tsv")
 	fs.StringVar(&cfg.jsonPath, "json", "", "explicit output JSON path; default <out-dir>/design.json")
 	fs.StringVar(&cfg.denominator, "denominator", "non-n", "FASTA denominator for genome percentages: non-n or all")
 	genomeBasesFlag := fs.String("genome-bases", "", "explicit genome denominator, e.g. 2643888753")
@@ -363,13 +372,7 @@ func parseArgs(args []string, stderr io.Writer) (cliConfig, error) {
 	fs.BoolVar(&cfg.showVersion, "version", false, "print version and exit")
 
 	fs.Usage = func() {
-		_, _ = fmt.Fprintln(stderr, "radigest-design — inverse enzyme-pair design from coverage/depth targets")
-		_, _ = fmt.Fprintln(stderr)
-		_, _ = fmt.Fprintln(stderr, "Usage:")
-		_, _ = fmt.Fprintln(stderr, "  radigest-design --ref ref.fa --enzymes enzymes.txt --pct 2.5 --depth 10 --samples 96 --read-length 150 --flowcell-read-pairs 300M [options]")
-		_, _ = fmt.Fprintln(stderr, "  radigest-design --fasta ref.fa --enzymes enzymes.txt --target-genome-pct 2.5 --desired-depth 10 --samples 96 --read-length 150 --lane-read-pairs 300M [options]")
-		_, _ = fmt.Fprintln(stderr)
-		fs.PrintDefaults()
+		writeDesignUsage(stderr, version, defaults)
 	}
 
 	if err := fs.Parse(args); err != nil {
@@ -667,7 +670,7 @@ func scorePairs(idx screen.CutIndex, pairs []screen.Pair, selector sizeselect.Se
 	return summaries, nil
 }
 
-func buildReport(args []string, cfg cliConfig, idx screen.CutIndex, refBases design.GenomeBases, genomeBases int64, selectorCfg sizeselect.Config, budget design.SequencingBudget, target design.DesignTarget, weights design.ScoreWeights, warnings []string, allCandidates []design.Candidate, reported []design.Candidate, tsvPath, jsonPath string) designReport {
+func buildReport(args []string, cfg cliConfig, idx screen.CutIndex, refBases design.GenomeBases, genomeBases int64, selectorCfg sizeselect.Config, budget design.SequencingBudget, target design.DesignTarget, weights design.ScoreWeights, warnings []string, allCandidates []design.Candidate, reported []design.Candidate, tsvPath, summaryTSVPath, jsonPath string) designReport {
 	feasiblePairs := 0
 	for _, candidate := range allCandidates {
 		if candidate.Feasible {
@@ -728,45 +731,63 @@ func buildReport(args []string, cfg cliConfig, idx screen.CutIndex, refBases des
 			CachedCutSites:           idx.CachedCutSites(),
 			CacheMemoryEstimateBytes: idx.CacheMemoryEstimateBytes(),
 		},
-		Outputs:  outputSummary{TSV: tsvPath, JSON: jsonPath},
+		Outputs:  outputSummary{TSV: tsvPath, SummaryTSV: summaryTSVPath, JSON: jsonPath},
 		Warnings: warnings,
 		Summary:  summary,
 		Results:  append([]design.Candidate(nil), reported...),
 	}
 }
 
-func resolveOutputPaths(cfg cliConfig) (string, string) {
+func resolveOutputPaths(cfg cliConfig) (string, string, string) {
 	tsvPath := strings.TrimSpace(cfg.tsvPath)
+	summaryTSVPath := strings.TrimSpace(cfg.summaryTSVPath)
 	jsonPath := strings.TrimSpace(cfg.jsonPath)
 	if tsvPath == "" {
 		tsvPath = filepath.Join(cfg.outDir, "design.tsv")
 	}
+	if summaryTSVPath == "" {
+		summaryTSVPath = filepath.Join(cfg.outDir, "design.summary.tsv")
+	}
 	if jsonPath == "" {
 		jsonPath = filepath.Join(cfg.outDir, "design.json")
 	}
-	return tsvPath, jsonPath
+	return tsvPath, summaryTSVPath, jsonPath
 }
 
-func ensureOutputPaths(tsvPath, jsonPath string, force bool) error {
-	for _, path := range []string{tsvPath, jsonPath} {
-		if strings.TrimSpace(path) == "" {
-			return fmt.Errorf("output path must not be empty")
+func ensureOutputPaths(tsvPath, summaryTSVPath, jsonPath string, force bool) error {
+	outputs := []namedOutputPath{
+		{name: "TSV", path: tsvPath},
+		{name: "summary TSV", path: summaryTSVPath},
+		{name: "JSON", path: jsonPath},
+	}
+	for _, output := range outputs {
+		if strings.TrimSpace(output.path) == "" {
+			return fmt.Errorf("%s output path must not be empty", output.name)
 		}
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(output.path), 0o755); err != nil {
 			return err
 		}
 		if !force {
-			if _, err := os.Stat(path); err == nil {
-				return fmt.Errorf("output exists: %s; use --force to overwrite", path)
+			if _, err := os.Stat(output.path); err == nil {
+				return fmt.Errorf("output exists: %s; use --force to overwrite", output.path)
 			} else if !os.IsNotExist(err) {
 				return err
 			}
 		}
 	}
-	if samePath(tsvPath, jsonPath) {
-		return fmt.Errorf("refusing to write TSV and JSON to the same path %q", tsvPath)
+	for i := 0; i < len(outputs); i++ {
+		for j := i + 1; j < len(outputs); j++ {
+			if samePath(outputs[i].path, outputs[j].path) {
+				return fmt.Errorf("refusing to write %s and %s to the same path %q", outputs[i].name, outputs[j].name, outputs[i].path)
+			}
+		}
 	}
 	return nil
+}
+
+type namedOutputPath struct {
+	name string
+	path string
 }
 
 func samePath(a, b string) bool {
@@ -800,6 +821,80 @@ func writeCandidatesTSV(path string, candidates []design.Candidate) (err error) 
 	}
 	writer.Flush()
 	return writer.Error()
+}
+
+func writeCandidateSummaryTSV(path string, candidates []design.Candidate) (err error) {
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if closeErr := f.Close(); closeErr != nil && err == nil {
+			err = closeErr
+		}
+	}()
+	writer := csv.NewWriter(f)
+	writer.Comma = '\t'
+	if err := writer.Write(designSummaryTSVHeader()); err != nil {
+		return err
+	}
+	for _, candidate := range candidates {
+		if err := writer.Write(candidateSummaryTSVRow(candidate)); err != nil {
+			return err
+		}
+	}
+	writer.Flush()
+	return writer.Error()
+}
+
+func designSummaryTSVHeader() []string {
+	return []string{
+		"rank",
+		"enzyme_pair",
+		"feasible",
+		"decision_reason",
+		"target_pct",
+		"predicted_pct",
+		"pct_error",
+		"target_depth",
+		"predicted_depth",
+		"read_pairs_per_sample",
+		"max_samples",
+		"weighted_fragments",
+		"mean_insert_bp",
+		"insert_status",
+		"fit_score",
+	}
+}
+
+func candidateSummaryTSVRow(c design.Candidate) []string {
+	return []string{
+		strconv.Itoa(c.Rank),
+		enzymePair(c),
+		strconv.FormatBool(c.Feasible),
+		c.DecisionReason,
+		formatFloat(c.TargetGenomePct),
+		formatFloat(c.PredictedWeightedGenomePct),
+		formatFloat(c.CoverageErrorPctPoints),
+		formatFloat(c.TargetMeanLocusDepth),
+		formatFloat(c.PredictedMeanLocusDepth),
+		formatFloat(c.ReadPairsPerSample),
+		strconv.Itoa(c.MaxSamplesTotalFullTarget),
+		formatFloat(c.WeightedFragments),
+		formatFloat(c.MeanWeightedLength),
+		c.MeanInsertCategory,
+		formatFloat(c.FitScore),
+	}
+}
+
+func enzymePair(c design.Candidate) string {
+	if c.EnzymeA == "" && c.EnzymeB == "" {
+		return strings.Join(c.Enzymes, ",")
+	}
+	if c.EnzymeB == "" {
+		return c.EnzymeA
+	}
+	return c.EnzymeA + "," + c.EnzymeB
 }
 
 func designTSVHeader() []string {

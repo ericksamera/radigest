@@ -392,7 +392,7 @@ radigest-design \
   --out-dir radigest_design
 ```
 
-The command writes `design.tsv` and `design.json`. The TSV is the primary review table; it includes `feasible`, `decision_reason`, `fit_score`, `fit_loss`, `predicted_weighted_genome_pct`, `target_mean_locus_depth`, `predicted_mean_locus_depth`, depth shortfall, sequencing-budget columns, insert-size diagnostics, and cached-screening provenance. The JSON records the full command, digest parameters, reference denominator, sequencing budget, scoring weights, warnings, and ranked results for reproducibility.
+The command writes `design.summary.tsv`, `design.tsv`, and `design.json`. `design.summary.tsv` is the compact human-review table with rank, enzyme pair, feasibility, target and predicted genome percentage, target and predicted mean locus depth, read-pair budget, max samples, weighted fragments, mean insert, insert status, and `fit_score`. The full `design.tsv` keeps the machine-readable table with `feasible`, `decision_reason`, `fit_score`, `fit_loss`, `predicted_weighted_genome_pct`, `target_mean_locus_depth`, `predicted_mean_locus_depth`, depth shortfall, sequencing-budget columns, insert-size diagnostics, and cached-screening provenance. The JSON records the full command, digest parameters, reference denominator, sequencing budget, scoring weights, warnings, output paths, and ranked results for reproducibility.
 
 The default `--objective balanced` prioritizes pairs that both match the requested weighted genome percentage within `--coverage-tolerance-pct` and meet `--desired-depth`/`--depth` for the planned sample count. Other objectives are available for sensitivity checks: `closest-coverage`, `depth-first`, `feasible-lowest-coverage`, and `max-depth`.
 

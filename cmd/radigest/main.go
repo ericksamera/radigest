@@ -168,42 +168,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	simSeed := fs.Int64("sim-seed", 1, "PRNG seed for -sim-len (0 ⇒ time-based)")
 
 	fs.Usage = func() {
-		b := &strings.Builder{}
-		fmt.Fprintln(b, "Author:  Erick Samera (erick.samera@kpu.ca)")
-		fmt.Fprintln(b, "License: MIT")
-		fmt.Fprintln(b, "Version:", version)
-		fmt.Fprintln(b)
-		fmt.Fprintln(b, "radigest — in-silico single/double digest with JSON summaries and optional fragment exports")
-		fmt.Fprintln(b)
-		fmt.Fprintln(b, "Usage:")
-		fmt.Fprintln(b, "  radigest -fasta <ref.fa|-> -enzymes <E1[,E2]> [options]")
-		fmt.Fprintln(b, "  radigest -sim-len <bp> -sim-gc <0..1> -enzymes <E1[,E2]> [options]")
-		fmt.Fprintln(b)
-		fmt.Fprintln(b, "Required flags:")
-		fmt.Fprintln(b, "  -enzymes, and exactly one of -fasta or -sim-len")
-		fmt.Fprintln(b)
-		fmt.Fprintln(b, "Options:")
-		oldOutput := fs.Output()
-		fs.SetOutput(b)
-		fs.PrintDefaults()
-		fs.SetOutput(oldOutput)
-		fmt.Fprintln(b)
-		fmt.Fprintln(b, "Examples:")
-		fmt.Fprintln(b, "  # Default: write run summary JSON to stdout")
-		fmt.Fprintln(b, "  radigest -fasta ref.fa -enzymes EcoRI,MseI")
-		fmt.Fprintln(b, "  # Pipe FASTA in and write BED to stdout")
-		fmt.Fprintln(b, "  zcat ref.fa.gz | radigest -fasta - -enzymes EcoRI,MseI -bed - | bgzip > frag.bed.gz")
-		fmt.Fprintln(b, "  # Single digest (EcoRI) to GFF file")
-		fmt.Fprintln(b, "  radigest -fasta ref.fa -enzymes EcoRI -gff out.gff3 -bed out.bed")
-		fmt.Fprintln(b, "  # Double digest with hard size selection + JSON summary file")
-		fmt.Fprintln(b, "  radigest -fasta ref.fa -enzymes EcoRI,MseI -min 100 -max 800 -json run.json")
-		fmt.Fprintln(b, "  # Double digest with soft-window scoring and broad per-fragment TSV")
-		fmt.Fprintln(b, "  radigest -fasta ref.fa -enzymes PstI,MspI -min 250 -max 500 -score-min 1 -score-max 1000 -size-model soft-window -size-edge-sd 25 -fragments-tsv fragments.tsv -json run.json")
-		fmt.Fprintln(b, "  # Simulate a 10 Mb genome at 42% GC and digest (chromosome name is always chr1)")
-		fmt.Fprintln(b, "  radigest -sim-len 10000000 -sim-gc 0.42 -enzymes EcoRI,MseI -gff out.gff3")
-		if _, err := fmt.Fprint(stderr, b.String()); err != nil {
-			return
-		}
+		writeRadigestUsage(stderr, version)
 	}
 
 	if err := fs.Parse(args); err != nil {

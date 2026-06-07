@@ -44,6 +44,7 @@ func TestRunWritesDesignOutputs(t *testing.T) {
 	}
 
 	tsvPath := filepath.Join(outDir, "design.tsv")
+	summaryTSVPath := filepath.Join(outDir, "design.summary.tsv")
 	jsonPath := filepath.Join(outDir, "design.json")
 	rows := readTSV(t, tsvPath)
 	if len(rows) != 4 {
@@ -67,6 +68,23 @@ func TestRunWritesDesignOutputs(t *testing.T) {
 		t.Fatalf("top pair feasible = %s, want true", rows[1][header["feasible"]])
 	}
 
+	summaryRows := readTSV(t, summaryTSVPath)
+	if len(summaryRows) != 4 {
+		t.Fatalf("got %d summary TSV rows, want header + 3 candidates", len(summaryRows))
+	}
+	summaryHeader := indexHeader(summaryRows[0])
+	for _, name := range []string{"rank", "enzyme_pair", "feasible", "target_pct", "predicted_pct", "target_depth", "predicted_depth", "max_samples", "fit_score"} {
+		if _, ok := summaryHeader[name]; !ok {
+			t.Fatalf("summary TSV header missing %s: %#v", name, summaryRows[0])
+		}
+	}
+	if summaryRows[1][summaryHeader["enzyme_pair"]] != "EcoRI,MseI" {
+		t.Fatalf("summary top enzyme_pair = %s, want EcoRI,MseI", summaryRows[1][summaryHeader["enzyme_pair"]])
+	}
+	if summaryRows[1][summaryHeader["feasible"]] != "true" {
+		t.Fatalf("summary top feasible = %s, want true", summaryRows[1][summaryHeader["feasible"]])
+	}
+
 	data, err := os.ReadFile(jsonPath)
 	if err != nil {
 		t.Fatalf("read JSON: %v", err)
@@ -79,6 +97,11 @@ func TestRunWritesDesignOutputs(t *testing.T) {
 			FeasiblePairs  int      `json:"feasible_pairs"`
 			BestPair       []string `json:"best_pair"`
 		} `json:"summary"`
+		Outputs struct {
+			TSV        string `json:"tsv"`
+			SummaryTSV string `json:"summary_tsv"`
+			JSON       string `json:"json"`
+		} `json:"outputs"`
 		Results []struct {
 			EnzymeA  string `json:"enzyme_a"`
 			EnzymeB  string `json:"enzyme_b"`
@@ -94,10 +117,16 @@ func TestRunWritesDesignOutputs(t *testing.T) {
 	if len(report.Command) == 0 || report.Command[0] != "radigest-design" {
 		t.Fatalf("command[0] = %#v, want radigest-design", report.Command)
 	}
+	if report.Outputs.TSV != tsvPath || report.Outputs.SummaryTSV != summaryTSVPath || report.Outputs.JSON != jsonPath {
+		t.Fatalf("output paths not recorded correctly: %+v", report.Outputs)
+	}
 	for _, needle := range []string{"size_model\thard", "hard_size_window_bp\t1-100", "score_range_bp\t1-100", "size_mean_bp\tNA", "size_sd_bp\tNA"} {
 		if !strings.Contains(stderr.String(), needle) {
 			t.Fatalf("stderr missing %q; stderr:\n%s", needle, stderr.String())
 		}
+	}
+	if !strings.Contains(stderr.String(), "design_summary_tsv\t"+summaryTSVPath) {
+		t.Fatalf("stderr missing design summary path %q; stderr:\n%s", summaryTSVPath, stderr.String())
 	}
 	if got := report.Summary.BestPair; len(got) != 2 || got[0] != "EcoRI" || got[1] != "MseI" {
 		t.Fatalf("best_pair = %+v, want EcoRI,MseI", got)
@@ -139,8 +168,40 @@ func TestRunAcceptsConciseDesignAliases(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(outDir, "design.tsv")); err != nil {
 		t.Fatalf("expected design.tsv: %v", err)
 	}
+	if _, err := os.Stat(filepath.Join(outDir, "design.summary.tsv")); err != nil {
+		t.Fatalf("expected design.summary.tsv: %v", err)
+	}
 	if _, err := os.Stat(filepath.Join(outDir, "design.json")); err != nil {
 		t.Fatalf("expected design.json: %v", err)
+	}
+}
+
+func TestRunHelpShowsGroupedDesignHelp(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	err := run([]string{"--help"}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("help returned error: %v", err)
+	}
+	help := stderr.String()
+	for _, needle := range []string{
+		"radigest-design\n",
+		"Author:  Gennerick J. Samera (erick.samera@kpu.ca)",
+		"Version: " + version,
+		"License: MIT",
+		"Description: rank enzyme pairs from genome-fraction, depth, and sequencing-budget targets",
+		"Required design inputs:",
+		"Size selection and recovery model:",
+		"Sequencing budget:",
+		"Ranking and scoring:",
+		"Size-selection models:",
+		"normal",
+		"triangular",
+		"soft-window",
+		"Outputs written:",
+	} {
+		if !strings.Contains(help, needle) {
+			t.Fatalf("help missing %q; help:\n%s", needle, help)
+		}
 	}
 }
 
