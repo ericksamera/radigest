@@ -90,6 +90,7 @@ func writeDesignUsage(w io.Writer, version string, weights design.ScoreWeights) 
 				{Names: []string{"--summary-tsv"}, Arg: "PATH", Default: "<out-dir>/design.summary.tsv", Text: "Compact human-review table."},
 				{Names: []string{"--tsv"}, Arg: "PATH", Default: "<out-dir>/design.tsv", Text: "Full machine-readable table."},
 				{Names: []string{"--json"}, Arg: "PATH", Default: "<out-dir>/design.json", Text: "Reproducibility/report JSON."},
+				{Names: []string{"--report"}, Arg: "PATH", Default: "<out-dir>/design.report.txt", Text: "Structured key-value text report for quick review and simple parsing."},
 				{Names: []string{"--top"}, Arg: "INT", Default: "0", Text: "Limit reported ranked rows/results. 0 means all."},
 				{Names: []string{"--force"}, Text: "Overwrite existing outputs."},
 			},
@@ -118,6 +119,7 @@ func writeDesignUsage(w io.Writer, version string, weights design.ScoreWeights) 
 	_, _ = fmt.Fprintln(w, "  radigest_design/design.summary.tsv  compact table for human review")
 	_, _ = fmt.Fprintln(w, "  radigest_design/design.tsv          full ranked design table")
 	_, _ = fmt.Fprintln(w, "  radigest_design/design.json         full provenance, parameters, warnings, and ranked results")
+	_, _ = fmt.Fprintln(w, "  radigest_design/design.report.txt   structured key-value text report")
 	_, _ = fmt.Fprintln(w)
 	_, _ = fmt.Fprintln(w, "Notes:")
 	_, _ = fmt.Fprintln(w, "  Genome percentage means weighted recovered genome percentage under the specified size-selection/recovery model.")

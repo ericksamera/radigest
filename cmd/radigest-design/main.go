@@ -37,6 +37,7 @@ type cliConfig struct {
 	tsvPath              string
 	summaryTSVPath       string
 	jsonPath             string
+	reportPath           string
 	denominator          string
 	genomeBases          int64
 	minLen               int
@@ -108,6 +109,7 @@ type outputSummary struct {
 	TSV        string `json:"tsv"`
 	SummaryTSV string `json:"summary_tsv"`
 	JSON       string `json:"json"`
+	Report     string `json:"report"`
 }
 
 type designReport struct {
@@ -287,12 +289,12 @@ func run(args []string, stdout, stderr io.Writer) error {
 		warnings = append(warnings, "no candidate pairs were scored")
 	}
 
-	tsvPath, summaryTSVPath, jsonPath := resolveOutputPaths(cfg)
-	if err := ensureOutputPaths(tsvPath, summaryTSVPath, jsonPath, cfg.force); err != nil {
+	tsvPath, summaryTSVPath, jsonPath, reportPath := resolveOutputPaths(cfg)
+	if err := ensureOutputPaths(tsvPath, summaryTSVPath, jsonPath, reportPath, cfg.force); err != nil {
 		return err
 	}
 
-	report := buildReport(args, cfg, idx, refBases, genomeBases, selector.Config(), budget, target, weights, warnings, candidates, reported, tsvPath, summaryTSVPath, jsonPath)
+	report := buildReport(args, cfg, idx, refBases, genomeBases, selector.Config(), budget, target, weights, warnings, candidates, reported, tsvPath, summaryTSVPath, jsonPath, reportPath)
 	if err := writeCandidatesTSV(tsvPath, report.Results); err != nil {
 		return err
 	}
@@ -300,6 +302,9 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	if err := writeJSONAtomic(jsonPath, report); err != nil {
+		return err
+	}
+	if err := writeDesignReportText(reportPath, report); err != nil {
 		return err
 	}
 
@@ -310,6 +315,9 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	if _, err := fmt.Fprintf(stderr, "design_json\t%s\n", jsonPath); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(stderr, "design_report\t%s\n", reportPath); err != nil {
 		return err
 	}
 	return nil
@@ -329,6 +337,7 @@ func parseArgs(args []string, stderr io.Writer) (cliConfig, error) {
 	fs.StringVar(&cfg.tsvPath, "tsv", "", "explicit full output TSV path; default <out-dir>/design.tsv")
 	fs.StringVar(&cfg.summaryTSVPath, "summary-tsv", "", "explicit compact summary TSV path; default <out-dir>/design.summary.tsv")
 	fs.StringVar(&cfg.jsonPath, "json", "", "explicit output JSON path; default <out-dir>/design.json")
+	fs.StringVar(&cfg.reportPath, "report", "", "explicit structured text report path; default <out-dir>/design.report.txt")
 	fs.StringVar(&cfg.denominator, "denominator", "non-n", "FASTA denominator for genome percentages: non-n or all")
 	genomeBasesFlag := fs.String("genome-bases", "", "explicit genome denominator, e.g. 2643888753")
 
@@ -670,7 +679,7 @@ func scorePairs(idx screen.CutIndex, pairs []screen.Pair, selector sizeselect.Se
 	return summaries, nil
 }
 
-func buildReport(args []string, cfg cliConfig, idx screen.CutIndex, refBases design.GenomeBases, genomeBases int64, selectorCfg sizeselect.Config, budget design.SequencingBudget, target design.DesignTarget, weights design.ScoreWeights, warnings []string, allCandidates []design.Candidate, reported []design.Candidate, tsvPath, summaryTSVPath, jsonPath string) designReport {
+func buildReport(args []string, cfg cliConfig, idx screen.CutIndex, refBases design.GenomeBases, genomeBases int64, selectorCfg sizeselect.Config, budget design.SequencingBudget, target design.DesignTarget, weights design.ScoreWeights, warnings []string, allCandidates []design.Candidate, reported []design.Candidate, tsvPath, summaryTSVPath, jsonPath, reportPath string) designReport {
 	feasiblePairs := 0
 	for _, candidate := range allCandidates {
 		if candidate.Feasible {
@@ -731,17 +740,18 @@ func buildReport(args []string, cfg cliConfig, idx screen.CutIndex, refBases des
 			CachedCutSites:           idx.CachedCutSites(),
 			CacheMemoryEstimateBytes: idx.CacheMemoryEstimateBytes(),
 		},
-		Outputs:  outputSummary{TSV: tsvPath, SummaryTSV: summaryTSVPath, JSON: jsonPath},
+		Outputs:  outputSummary{TSV: tsvPath, SummaryTSV: summaryTSVPath, JSON: jsonPath, Report: reportPath},
 		Warnings: warnings,
 		Summary:  summary,
 		Results:  append([]design.Candidate(nil), reported...),
 	}
 }
 
-func resolveOutputPaths(cfg cliConfig) (string, string, string) {
+func resolveOutputPaths(cfg cliConfig) (string, string, string, string) {
 	tsvPath := strings.TrimSpace(cfg.tsvPath)
 	summaryTSVPath := strings.TrimSpace(cfg.summaryTSVPath)
 	jsonPath := strings.TrimSpace(cfg.jsonPath)
+	reportPath := strings.TrimSpace(cfg.reportPath)
 	if tsvPath == "" {
 		tsvPath = filepath.Join(cfg.outDir, "design.tsv")
 	}
@@ -751,14 +761,18 @@ func resolveOutputPaths(cfg cliConfig) (string, string, string) {
 	if jsonPath == "" {
 		jsonPath = filepath.Join(cfg.outDir, "design.json")
 	}
-	return tsvPath, summaryTSVPath, jsonPath
+	if reportPath == "" {
+		reportPath = filepath.Join(cfg.outDir, "design.report.txt")
+	}
+	return tsvPath, summaryTSVPath, jsonPath, reportPath
 }
 
-func ensureOutputPaths(tsvPath, summaryTSVPath, jsonPath string, force bool) error {
+func ensureOutputPaths(tsvPath, summaryTSVPath, jsonPath, reportPath string, force bool) error {
 	outputs := []namedOutputPath{
 		{name: "TSV", path: tsvPath},
 		{name: "summary TSV", path: summaryTSVPath},
 		{name: "JSON", path: jsonPath},
+		{name: "report", path: reportPath},
 	}
 	for _, output := range outputs {
 		if strings.TrimSpace(output.path) == "" {
@@ -977,6 +991,110 @@ func candidateTSVRow(c design.Candidate) []string {
 		strconv.Itoa(c.CachedCutSites),
 		strconv.FormatInt(c.CacheMemoryEstimateBytes, 10),
 	}
+}
+
+func writeDesignReportText(path string, report designReport) error {
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	if err := writeDesignReportTextTo(f, report); err != nil {
+		_ = f.Close()
+		return err
+	}
+	return f.Close()
+}
+
+func writeDesignReportTextTo(w io.Writer, report designReport) error {
+	if w == nil {
+		return fmt.Errorf("design report writer is nil")
+	}
+	rows := designReportRows(report)
+	for _, row := range rows {
+		if _, err := fmt.Fprintf(w, "%s\t%s\n", row.key, reportValue(row.value)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func reportValue(value string) string {
+	return strings.NewReplacer("\t", " ", "\n", " ", "\r", " ").Replace(value)
+}
+
+type reportRow struct {
+	key   string
+	value string
+}
+
+func designReportRows(report designReport) []reportRow {
+	rows := []reportRow{
+		{"format", "radigest-design-report-v1"},
+		{"schema_version", strconv.Itoa(report.SchemaVersion)},
+		{"radigest_version", report.RadigestVersion},
+		{"candidate_enzymes", strconv.Itoa(report.Summary.CandidateEnzymes)},
+		{"candidate_pairs", strconv.Itoa(report.Summary.CandidatePairs)},
+		{"reported_pairs", strconv.Itoa(report.Summary.ReportedPairs)},
+		{"feasible_pairs", strconv.Itoa(report.Summary.FeasiblePairs)},
+		{"target_genome_pct", formatFloat(report.Target.TargetGenomePct)},
+		{"coverage_tolerance_pct", formatFloat(report.Target.CoverageTolerancePct)},
+		{"target_mean_locus_depth", formatFloat(report.Sequencing.TargetMeanLocusDepth)},
+		{"samples", strconv.Itoa(report.Sequencing.Samples)},
+		{"read_layout", report.Sequencing.ReadLayout},
+		{"read_length", strconv.Itoa(report.Sequencing.ReadLength)},
+		{"lane_read_pairs", formatFloat(report.Sequencing.LaneReadPairs)},
+		{"lanes", strconv.Itoa(report.Sequencing.Lanes)},
+		{"usable_read_fraction", formatFloat(report.Sequencing.UsableReadFraction)},
+		{"genome_bases", strconv.FormatInt(report.Input.GenomeBases, 10)},
+		{"denominator", report.Input.Denominator},
+		{"size_model", report.Digest.SizeModel},
+		{"hard_size_min_bp", strconv.Itoa(report.Digest.MinLength)},
+		{"hard_size_max_bp", strconv.Itoa(report.Digest.MaxLength)},
+		{"score_min_bp", strconv.Itoa(report.Digest.ScoreMin)},
+		{"score_max_bp", strconv.Itoa(report.Digest.ScoreMax)},
+	}
+
+	if len(report.Results) > 0 {
+		best := report.Results[0]
+		rows = append(rows,
+			reportRow{"best_pair", enzymePair(best)},
+			reportRow{"best_rank", strconv.Itoa(best.Rank)},
+			reportRow{"best_feasible", strconv.FormatBool(best.Feasible)},
+			reportRow{"best_decision_reason", best.DecisionReason},
+			reportRow{"best_fit_score", formatFloat(best.FitScore)},
+			reportRow{"best_fit_loss", formatFloat(best.FitLoss)},
+			reportRow{"best_predicted_weighted_genome_pct", formatFloat(best.PredictedWeightedGenomePct)},
+			reportRow{"best_coverage_error_pct_points", formatFloat(best.CoverageErrorPctPoints)},
+			reportRow{"best_predicted_mean_locus_depth", formatFloat(best.PredictedMeanLocusDepth)},
+			reportRow{"best_depth_margin", formatFloat(best.DepthMargin)},
+			reportRow{"best_read_pairs_per_sample", formatFloat(best.ReadPairsPerSample)},
+			reportRow{"best_max_samples_total_full_target", strconv.Itoa(best.MaxSamplesTotalFullTarget)},
+			reportRow{"best_weighted_fragments", formatFloat(best.WeightedFragments)},
+			reportRow{"best_weighted_bases", formatFloat(best.WeightedBases)},
+			reportRow{"best_mean_weighted_length_bp", formatFloat(best.MeanWeightedLength)},
+			reportRow{"best_mean_insert_category", best.MeanInsertCategory},
+		)
+	} else {
+		rows = append(rows,
+			reportRow{"best_pair", ""},
+			reportRow{"best_feasible", "false"},
+			reportRow{"best_decision_reason", "no candidate pairs were scored"},
+		)
+	}
+
+	rows = append(rows, reportRow{"warning_count", strconv.Itoa(len(report.Warnings))})
+	for i, warning := range report.Warnings {
+		rows = append(rows, reportRow{fmt.Sprintf("warning.%d", i+1), warning})
+	}
+
+	rows = append(rows,
+		reportRow{"output.summary_tsv", report.Outputs.SummaryTSV},
+		reportRow{"output.tsv", report.Outputs.TSV},
+		reportRow{"output.json", report.Outputs.JSON},
+		reportRow{"output.report", report.Outputs.Report},
+	)
+
+	return rows
 }
 
 func writeJSONAtomic(path string, value any) error {

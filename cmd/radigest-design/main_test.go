@@ -46,6 +46,7 @@ func TestRunWritesDesignOutputs(t *testing.T) {
 	tsvPath := filepath.Join(outDir, "design.tsv")
 	summaryTSVPath := filepath.Join(outDir, "design.summary.tsv")
 	jsonPath := filepath.Join(outDir, "design.json")
+	reportPath := filepath.Join(outDir, "design.report.txt")
 	rows := readTSV(t, tsvPath)
 	if len(rows) != 4 {
 		t.Fatalf("got %d TSV rows, want header + 3 candidates", len(rows))
@@ -85,6 +86,22 @@ func TestRunWritesDesignOutputs(t *testing.T) {
 		t.Fatalf("summary top feasible = %s, want true", summaryRows[1][summaryHeader["feasible"]])
 	}
 
+	reportRows := readKeyValueReport(t, reportPath)
+	for key, want := range map[string]string{
+		"format":        "radigest-design-report-v1",
+		"best_pair":     "EcoRI,MseI",
+		"best_feasible": "true",
+		"output.json":   jsonPath,
+		"output.report": reportPath,
+	} {
+		if got := reportRows[key]; got != want {
+			t.Fatalf("report[%s] = %q, want %q; report=%+v", key, got, want, reportRows)
+		}
+	}
+	if reportRows["best_predicted_weighted_genome_pct"] == "" || reportRows["best_predicted_mean_locus_depth"] == "" {
+		t.Fatalf("report missing predicted design metrics: %+v", reportRows)
+	}
+
 	data, err := os.ReadFile(jsonPath)
 	if err != nil {
 		t.Fatalf("read JSON: %v", err)
@@ -101,6 +118,7 @@ func TestRunWritesDesignOutputs(t *testing.T) {
 			TSV        string `json:"tsv"`
 			SummaryTSV string `json:"summary_tsv"`
 			JSON       string `json:"json"`
+			Report     string `json:"report"`
 		} `json:"outputs"`
 		Results []struct {
 			EnzymeA  string `json:"enzyme_a"`
@@ -117,7 +135,7 @@ func TestRunWritesDesignOutputs(t *testing.T) {
 	if len(report.Command) == 0 || report.Command[0] != "radigest-design" {
 		t.Fatalf("command[0] = %#v, want radigest-design", report.Command)
 	}
-	if report.Outputs.TSV != tsvPath || report.Outputs.SummaryTSV != summaryTSVPath || report.Outputs.JSON != jsonPath {
+	if report.Outputs.TSV != tsvPath || report.Outputs.SummaryTSV != summaryTSVPath || report.Outputs.JSON != jsonPath || report.Outputs.Report != reportPath {
 		t.Fatalf("output paths not recorded correctly: %+v", report.Outputs)
 	}
 	for _, needle := range []string{"size_model\thard", "hard_size_window_bp\t1-100", "score_range_bp\t1-100", "size_mean_bp\tNA", "size_sd_bp\tNA"} {
@@ -174,6 +192,9 @@ func TestRunAcceptsConciseDesignAliases(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(outDir, "design.json")); err != nil {
 		t.Fatalf("expected design.json: %v", err)
 	}
+	if _, err := os.Stat(filepath.Join(outDir, "design.report.txt")); err != nil {
+		t.Fatalf("expected design.report.txt: %v", err)
+	}
 }
 
 func TestRunHelpShowsGroupedDesignHelp(t *testing.T) {
@@ -198,6 +219,7 @@ func TestRunHelpShowsGroupedDesignHelp(t *testing.T) {
 		"triangular",
 		"soft-window",
 		"Outputs written:",
+		"design.report.txt",
 	} {
 		if !strings.Contains(help, needle) {
 			t.Fatalf("help missing %q; help:\n%s", needle, help)
@@ -238,6 +260,23 @@ func TestParsePositiveCount(t *testing.T) {
 	if gotInt != 2643888753 {
 		t.Fatalf("got %d, want 2643888753", gotInt)
 	}
+}
+
+func readKeyValueReport(t *testing.T, path string) map[string]string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read report: %v", err)
+	}
+	out := make(map[string]string)
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		parts := strings.SplitN(line, "\t", 2)
+		if len(parts) != 2 {
+			t.Fatalf("invalid report line %q in report:\n%s", line, string(data))
+		}
+		out[parts[0]] = parts[1]
+	}
+	return out
 }
 
 func readTSV(t *testing.T, path string) [][]string {
