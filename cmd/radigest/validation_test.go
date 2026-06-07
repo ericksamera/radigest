@@ -59,46 +59,49 @@ func TestParseEnzymesRejectsInvalidInputs(t *testing.T) {
 }
 
 func TestValidateOutputSelection(t *testing.T) {
-	if err := validateOutputSelection("", "", "", "-"); err != nil {
+	if err := validateOutputSelection("", "", "", "", "-"); err != nil {
 		t.Fatalf("json stdout should satisfy output selection: %v", err)
 	}
-	if err := validateOutputSelection("", "", "", ""); err == nil {
+	if err := validateOutputSelection("", "", "", "", ""); err == nil {
 		t.Fatalf("expected all disabled outputs to be rejected")
 	}
 }
 
 func TestValidateOutputPathsRejectsCollisions(t *testing.T) {
-	if err := validateOutputPaths("ref.fa", "ref.fa", "fragments.tsv", "fragments.fa", "run.json", true); err == nil {
+	if err := validateOutputPaths("ref.fa", "ref.fa", "fragments.bed", "fragments.tsv", "fragments.fa", "run.json", true); err == nil {
 		t.Fatalf("expected -gff/-fasta path collision to be rejected")
 	}
-	if err := validateOutputPaths("ref.fa", "out.gff3", "out.gff3", "fragments.fa", "run.json", true); err == nil {
-		t.Fatalf("expected -gff/-fragments-tsv path collision to be rejected")
+	if err := validateOutputPaths("ref.fa", "out.gff3", "out.gff3", "fragments.tsv", "fragments.fa", "run.json", true); err == nil {
+		t.Fatalf("expected -gff/-bed path collision to be rejected")
 	}
-	if err := validateOutputPaths("ref.fa", "out.gff3", "fragments.tsv", "out.gff3", "run.json", true); err == nil {
+	if err := validateOutputPaths("ref.fa", "out.gff3", "fragments.bed", "fragments.bed", "fragments.fa", "run.json", true); err == nil {
+		t.Fatalf("expected -bed/-fragments-tsv path collision to be rejected")
+	}
+	if err := validateOutputPaths("ref.fa", "out.gff3", "fragments.bed", "fragments.tsv", "out.gff3", "run.json", true); err == nil {
 		t.Fatalf("expected -gff/-fragments-fasta path collision to be rejected")
 	}
-	if err := validateOutputPaths("ref.fa", "out.gff3", "fragments.tsv", "ref.fa", "run.json", true); err == nil {
+	if err := validateOutputPaths("ref.fa", "out.gff3", "fragments.bed", "fragments.tsv", "ref.fa", "run.json", true); err == nil {
 		t.Fatalf("expected -fasta/-fragments-fasta path collision to be rejected")
 	}
-	if err := validateOutputPaths("ref.fa", "out.gff3", "fragments.tsv", "fragments.fa", "out.gff3", true); err == nil {
+	if err := validateOutputPaths("ref.fa", "out.gff3", "fragments.bed", "fragments.tsv", "fragments.fa", "out.gff3", true); err == nil {
 		t.Fatalf("expected -gff/-json path collision to be rejected")
 	}
-	if err := validateOutputPaths("ref.fa", "-", "-", "fragments.fa", "run.json", true); err == nil {
+	if err := validateOutputPaths("ref.fa", "-", "-", "fragments.tsv", "fragments.fa", "run.json", true); err == nil {
 		t.Fatalf("expected two stdout outputs to be rejected")
 	}
-	if err := validateOutputPaths("ref.fa", "-", "", "fragments.fa", "-", true); err == nil {
+	if err := validateOutputPaths("ref.fa", "-", "", "", "fragments.fa", "-", true); err == nil {
 		t.Fatalf("expected -gff stdout and -json stdout collision to be rejected")
 	}
 }
 
 func TestValidateOutputPathsAllowsDisabledOutputsAndStdout(t *testing.T) {
-	if err := validateOutputPaths("-", "-", "", "", "", true); err != nil {
+	if err := validateOutputPaths("-", "-", "", "", "", "", true); err != nil {
 		t.Fatalf("stdout/disabled outputs should be allowed: %v", err)
 	}
-	if err := validateOutputPaths("ref.fa", "", "", "", "-", true); err != nil {
+	if err := validateOutputPaths("ref.fa", "", "", "", "", "-", true); err != nil {
 		t.Fatalf("json stdout should be allowed: %v", err)
 	}
-	if err := validateOutputPaths("", "/dev/null", "", "", "", false); err != nil {
+	if err := validateOutputPaths("", "/dev/null", "", "", "", "", false); err != nil {
 		t.Fatalf("/dev/null should be allowed as a sink: %v", err)
 	}
 }

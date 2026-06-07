@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/ericksamera/radigest/internal/bed"
 	"github.com/ericksamera/radigest/internal/collector"
 	"github.com/ericksamera/radigest/internal/digest"
 	"github.com/ericksamera/radigest/internal/enzyme"
@@ -23,7 +24,7 @@ import (
 )
 
 var (
-	version = "v0.4.0"
+	version = "v0.5.0"
 )
 
 const summarySchemaVersion = 1
@@ -50,6 +51,7 @@ type runSummary struct {
 	MinLength      int              `json:"min_length"`
 	MaxLength      int              `json:"max_length"`
 	GFF            string           `json:"gff,omitempty"`
+	BED            string           `json:"bed,omitempty"`
 	FragmentsTSV   string           `json:"fragments_tsv,omitempty"`
 	FragmentsFASTA string           `json:"fragments_fasta,omitempty"`
 	SizeSelection  sizeselect.Stats `json:"size_selection"`
@@ -83,6 +85,7 @@ type parameterSummary struct {
 type outputSummary struct {
 	JSON           string `json:"json,omitempty"`
 	GFF            string `json:"gff,omitempty"`
+	BED            string `json:"bed,omitempty"`
 	FragmentsTSV   string `json:"fragments_tsv,omitempty"`
 	FragmentsFASTA string `json:"fragments_fasta,omitempty"`
 }
@@ -137,6 +140,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	minLen := fs.Int("min", 1, "minimum fragment length (bp) for hard-selected outputs")
 	maxLen := fs.Int("max", 1<<30, "maximum fragment length (bp) for hard-selected outputs")
 	gffPath := fs.String("gff", "", "optional GFF3 output for hard-selected fragments (path or '-' for stdout); empty string disables")
+	bedPath := fs.String("bed", "", "optional BED6 output for hard-selected fragments (path or '-' for stdout); empty string disables")
 	fragmentsTSVPath := fs.String("fragments-tsv", "", "optional per-fragment TSV for score-range fragments (path or '-' for stdout); empty string disables")
 	fragmentsFASTAPath := fs.String("fragments-fasta", "", "optional FASTA output for hard-selected fragments (path or '-' for stdout); empty string disables")
 	jsonPath := fs.String("json", "", "optional run summary JSON output (path or '-' for stdout); if no output flags are set, JSON is written to stdout")
@@ -164,42 +168,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	simSeed := fs.Int64("sim-seed", 1, "PRNG seed for -sim-len (0 ⇒ time-based)")
 
 	fs.Usage = func() {
-		b := &strings.Builder{}
-		fmt.Fprintln(b, "Author:  Erick Samera (erick.samera@kpu.ca)")
-		fmt.Fprintln(b, "License: MIT")
-		fmt.Fprintln(b, "Version:", version)
-		fmt.Fprintln(b)
-		fmt.Fprintln(b, "radigest — in-silico single/double digest with JSON summaries and optional fragment exports")
-		fmt.Fprintln(b)
-		fmt.Fprintln(b, "Usage:")
-		fmt.Fprintln(b, "  radigest -fasta <ref.fa|-> -enzymes <E1[,E2]> [options]")
-		fmt.Fprintln(b, "  radigest -sim-len <bp> -sim-gc <0..1> -enzymes <E1[,E2]> [options]")
-		fmt.Fprintln(b)
-		fmt.Fprintln(b, "Required flags:")
-		fmt.Fprintln(b, "  -enzymes, and exactly one of -fasta or -sim-len")
-		fmt.Fprintln(b)
-		fmt.Fprintln(b, "Options:")
-		oldOutput := fs.Output()
-		fs.SetOutput(b)
-		fs.PrintDefaults()
-		fs.SetOutput(oldOutput)
-		fmt.Fprintln(b)
-		fmt.Fprintln(b, "Examples:")
-		fmt.Fprintln(b, "  # Default: write run summary JSON to stdout")
-		fmt.Fprintln(b, "  radigest -fasta ref.fa -enzymes EcoRI,MseI")
-		fmt.Fprintln(b, "  # Pipe FASTA in and write GFF to stdout")
-		fmt.Fprintln(b, "  zcat ref.fa.gz | radigest -fasta - -enzymes EcoRI,MseI -gff - | bgzip > frag.gff3.gz")
-		fmt.Fprintln(b, "  # Single digest (EcoRI) to GFF file")
-		fmt.Fprintln(b, "  radigest -fasta ref.fa -enzymes EcoRI -gff out.gff3")
-		fmt.Fprintln(b, "  # Double digest with hard size selection + JSON summary file")
-		fmt.Fprintln(b, "  radigest -fasta ref.fa -enzymes EcoRI,MseI -min 100 -max 800 -json run.json")
-		fmt.Fprintln(b, "  # Double digest with soft-window scoring and broad per-fragment TSV")
-		fmt.Fprintln(b, "  radigest -fasta ref.fa -enzymes PstI,MspI -min 250 -max 500 -score-min 1 -score-max 1000 -size-model soft-window -size-edge-sd 25 -fragments-tsv fragments.tsv -json run.json")
-		fmt.Fprintln(b, "  # Simulate a 10 Mb genome at 42% GC and digest (chromosome name is always chr1)")
-		fmt.Fprintln(b, "  radigest -sim-len 10000000 -sim-gc 0.42 -enzymes EcoRI,MseI -gff out.gff3")
-		if _, err := fmt.Fprint(stderr, b.String()); err != nil {
-			return
-		}
+		writeRadigestUsage(stderr, version)
 	}
 
 	if err := fs.Parse(args); err != nil {
@@ -210,10 +179,11 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	}
 
 	gffOutputPath := normalizeOutputPath(*gffPath)
+	bedOutputPath := normalizeOutputPath(*bedPath)
 	fragmentsTSVOutputPath := normalizeOutputPath(*fragmentsTSVPath)
 	fragmentsFASTAOutputPath := normalizeOutputPath(*fragmentsFASTAPath)
 	jsonOutputPath := normalizeOutputPath(*jsonPath)
-	if !anyFlagSet(fs, "gff", "fragments-tsv", "fragments-fasta", "json") {
+	if !anyFlagSet(fs, "gff", "bed", "fragments-tsv", "fragments-fasta", "json") {
 		jsonOutputPath = "-"
 	}
 
@@ -258,10 +228,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		}
 	}
 
-	if err := validateOutputSelection(gffOutputPath, fragmentsTSVOutputPath, fragmentsFASTAOutputPath, jsonOutputPath); err != nil {
+	if err := validateOutputSelection(gffOutputPath, bedOutputPath, fragmentsTSVOutputPath, fragmentsFASTAOutputPath, jsonOutputPath); err != nil {
 		return err
 	}
-	if err := validateOutputPaths(*fastaPath, gffOutputPath, fragmentsTSVOutputPath, fragmentsFASTAOutputPath, jsonOutputPath, *fastaPath != ""); err != nil {
+	if err := validateOutputPaths(*fastaPath, gffOutputPath, bedOutputPath, fragmentsTSVOutputPath, fragmentsFASTAOutputPath, jsonOutputPath, *fastaPath != ""); err != nil {
 		return err
 	}
 
@@ -313,7 +283,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		resolvedSimSeed = sim.ResolveSeed(*simSeed)
 	}
 
-	if canUseStatsOnlyJSON(gffOutputPath, fragmentsTSVOutputPath, fragmentsFASTAOutputPath, jsonOutputPath, selector.Config()) {
+	if canUseStatsOnlyJSON(gffOutputPath, bedOutputPath, fragmentsTSVOutputPath, fragmentsFASTAOutputPath, jsonOutputPath, selector.Config()) {
 		return runStatsOnlyJSON(runStatsOnlyInput{
 			Args:             args,
 			Stdin:            stdin,
@@ -342,6 +312,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	writer, err := collector.NewWriterTo(gffOutputPath, stdout)
 	if err != nil {
 		return fmt.Errorf("collector: %w", err)
+	}
+	bedWriter, err := bed.NewTo(bedOutputPath, stdout)
+	if err != nil {
+		return fmt.Errorf("bed: %w", err)
 	}
 	fragWriter, err := fragmenttsv.NewTo(fragmentsTSVOutputPath, stdout)
 	if err != nil {
@@ -412,8 +386,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	}()
 
 	// ---- wait + finalize ----------------------------------------------------
-	sizeStats, streamErr := writeResultStreamsScoredTo(writer, fragWriter, fragFASTAWriter, selector, results, *verbose, stderr)
+	sizeStats, streamErr := writeResultStreamsScoredTo(writer, bedWriter, fragWriter, fragFASTAWriter, selector, results, *verbose, stderr)
 	stats, closeErr := writer.Close()
+	bedCloseErr := bedWriter.Close()
 	fragCloseErr := fragWriter.Close()
 	fragFASTACloseErr := fragFASTAWriter.Close()
 	if streamErr != nil {
@@ -425,6 +400,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	}
 	if closeErr != nil {
 		return fmt.Errorf("collector: %w", closeErr)
+	}
+	if bedCloseErr != nil {
+		return fmt.Errorf("bed: %w", bedCloseErr)
 	}
 	if fragCloseErr != nil {
 		return fmt.Errorf("fragments tsv: %w", fragCloseErr)
@@ -455,6 +433,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			SelectorConfig:     selector.Config(),
 			JSONPath:           jsonOutputPath,
 			GFFPath:            gffOutputPath,
+			BEDPath:            bedOutputPath,
 			FragmentsTSVPath:   fragmentsTSVOutputPath,
 			FragmentsFASTAPath: fragmentsFASTAOutputPath,
 			SizeSelection:      sizeStats,
@@ -496,9 +475,10 @@ type runStatsOnlyInput struct {
 	JSONPath         string
 }
 
-func canUseStatsOnlyJSON(gffPath, fragmentsTSVPath, fragmentsFASTAPath, jsonPath string, cfg sizeselect.Config) bool {
+func canUseStatsOnlyJSON(gffPath, bedPath, fragmentsTSVPath, fragmentsFASTAPath, jsonPath string, cfg sizeselect.Config) bool {
 	return jsonPath != "" &&
 		gffPath == "" &&
+		bedPath == "" &&
 		fragmentsTSVPath == "" &&
 		fragmentsFASTAPath == "" &&
 		cfg.Model == sizeselect.ModelHard &&
@@ -688,14 +668,14 @@ func writeResultStreamsTo(w *collector.Writer, results <-chan digestResult, verb
 	return nil
 }
 
-func writeResultStreamsScoredTo(w *collector.Writer, tsv *fragmenttsv.Writer, fastaWriter *fragmentfasta.Writer, selector sizeselect.Selector, results <-chan digestResult, verbose bool, stderr io.Writer) (sizeselect.Stats, error) {
+func writeResultStreamsScoredTo(w *collector.Writer, bedWriter *bed.Writer, tsv *fragmenttsv.Writer, fastaWriter *fragmentfasta.Writer, selector sizeselect.Selector, results <-chan digestResult, verbose bool, stderr io.Writer) (sizeselect.Stats, error) {
 	pending := make(map[int]digestResult)
 	next := 0
 	stats := sizeselect.NewStats(selector)
 
 	for results != nil || len(pending) > 0 {
 		if r, ok := pending[next]; ok {
-			cs, writeErr := writeScoredChromosome(w, tsv, fastaWriter, selector, &stats, r.chr, r.seq, r.frags)
+			cs, writeErr := writeScoredChromosome(w, bedWriter, tsv, fastaWriter, selector, &stats, r.chr, r.seq, r.frags)
 			digestErr := <-r.errors
 			delete(pending, next)
 			next++
@@ -727,7 +707,7 @@ func writeResultStreamsScoredTo(w *collector.Writer, tsv *fragmenttsv.Writer, fa
 	return stats, nil
 }
 
-func writeScoredChromosome(w *collector.Writer, tsv *fragmenttsv.Writer, fastaWriter *fragmentfasta.Writer, selector sizeselect.Selector, stats *sizeselect.Stats, chr string, seq []byte, frags <-chan digest.Fragment) (collector.ChrStats, error) {
+func writeScoredChromosome(w *collector.Writer, bedWriter *bed.Writer, tsv *fragmenttsv.Writer, fastaWriter *fragmentfasta.Writer, selector sizeselect.Selector, stats *sizeselect.Stats, chr string, seq []byte, frags <-chan digest.Fragment) (collector.ChrStats, error) {
 	var local collector.ChrStats
 	var firstErr error
 	ordinal := 1
@@ -750,6 +730,8 @@ func writeScoredChromosome(w *collector.Writer, tsv *fragmenttsv.Writer, fastaWr
 		if hardKept {
 			if firstErr == nil {
 				if err := w.WriteFragment(chr, ordinal, fr); err != nil {
+					firstErr = err
+				} else if err := bedWriter.Write(chr, ordinal, fr); err != nil {
 					firstErr = err
 				} else if err := fastaWriter.Write(chr, ordinal, fr, seq); err != nil {
 					firstErr = err
@@ -781,6 +763,7 @@ type runSummaryInput struct {
 	SelectorConfig     sizeselect.Config
 	JSONPath           string
 	GFFPath            string
+	BEDPath            string
 	FragmentsTSVPath   string
 	FragmentsFASTAPath string
 	SizeSelection      sizeselect.Stats
@@ -840,6 +823,7 @@ func buildRunSummary(in runSummaryInput) runSummary {
 	outputs := outputSummary{
 		JSON:           in.JSONPath,
 		GFF:            in.GFFPath,
+		BED:            in.BEDPath,
 		FragmentsTSV:   in.FragmentsTSVPath,
 		FragmentsFASTA: in.FragmentsFASTAPath,
 	}
@@ -857,6 +841,7 @@ func buildRunSummary(in runSummaryInput) runSummary {
 		MinLength:      in.MinLen,
 		MaxLength:      in.MaxLen,
 		GFF:            in.GFFPath,
+		BED:            in.BEDPath,
 		FragmentsTSV:   in.FragmentsTSVPath,
 		FragmentsFASTA: in.FragmentsFASTAPath,
 		SizeSelection:  in.SizeSelection,

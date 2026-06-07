@@ -47,7 +47,7 @@ func TestNoOutputFlagsWritesJSONToStdoutOnly(t *testing.T) {
 	if doc.TotalFragments != 2 || doc.TotalBases != 11 {
 		t.Fatalf("json stats wrong: %+v", doc)
 	}
-	for _, unexpected := range []string{"fragments.gff3", "fragments.tsv"} {
+	for _, unexpected := range []string{"fragments.gff3", "fragments.bed", "fragments.tsv"} {
 		if _, err := os.Stat(filepath.Join(dir, unexpected)); !os.IsNotExist(err) {
 			t.Fatalf("unexpected default output file %s exists or stat failed: %v", unexpected, err)
 		}
@@ -80,7 +80,7 @@ func TestExplicitJSONStdoutDoesNotCreateDefaultArtifacts(t *testing.T) {
 	if !json.Valid([]byte(stdout)) {
 		t.Fatalf("stdout is not valid JSON: %q", stdout)
 	}
-	for _, unexpected := range []string{"fragments.gff3", "fragments.tsv"} {
+	for _, unexpected := range []string{"fragments.gff3", "fragments.bed", "fragments.tsv"} {
 		if _, err := os.Stat(filepath.Join(dir, unexpected)); !os.IsNotExist(err) {
 			t.Fatalf("unexpected default output file %s exists or stat failed: %v", unexpected, err)
 		}
@@ -163,6 +163,60 @@ func TestSummaryIncludesSchemaProvenanceAndResolvedSimSeed(t *testing.T) {
 	}
 }
 
+func TestRunWritesBEDForHardKeptFragmentsAndRecordsOutput(t *testing.T) {
+	dir := t.TempDir()
+	refPath := filepath.Join(dir, "ref.fa")
+	bedPath := filepath.Join(dir, "fragments.bed")
+	jsonPath := filepath.Join(dir, "run.json")
+	if err := os.WriteFile(refPath, []byte(">chr1\nAAAAGAATTCTTAAAGAATTC\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{
+		"-fasta", refPath,
+		"-enzymes", "EcoRI,MseI",
+		"-min", "1",
+		"-max", "1000",
+		"-bed", bedPath,
+		"-json", jsonPath,
+		"-threads", "1",
+	}, strings.NewReader(""), &stdout, &stderr); err != nil {
+		t.Fatalf("run returned error: %v\nstderr:\n%s", err, stderr.String())
+	}
+
+	raw, err := os.ReadFile(bedPath)
+	if err != nil {
+		t.Fatalf("read BED: %v", err)
+	}
+	want := strings.Join([]string{
+		"chr1\t5\t11\tchr1_1\t0\t+",
+		"chr1\t11\t16\tchr1_2\t0\t+",
+		"",
+	}, "\n")
+	if string(raw) != want {
+		t.Fatalf("BED mismatch\nwant:\n%s\ngot:\n%s", want, string(raw))
+	}
+
+	data, err := os.ReadFile(jsonPath)
+	if err != nil {
+		t.Fatalf("read JSON: %v", err)
+	}
+	var doc struct {
+		BED     string `json:"bed"`
+		Outputs struct {
+			BED  string `json:"bed"`
+			JSON string `json:"json"`
+		} `json:"outputs"`
+	}
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatalf("parse JSON: %v\njson:\n%s", err, string(data))
+	}
+	if doc.BED != bedPath || doc.Outputs.BED != bedPath || doc.Outputs.JSON != jsonPath {
+		t.Fatalf("BED/JSON output paths not recorded correctly: %+v", doc)
+	}
+}
+
 func TestRunReadsInjectedStdinAndWritesInjectedStdout(t *testing.T) {
 	stdout, _ := runCaptured(t, []string{
 		"-fasta", "-",
@@ -190,8 +244,36 @@ func TestRunMissingRequiredFlagsReturnsUsageError(t *testing.T) {
 	if exitCode(err) != 2 {
 		t.Fatalf("expected usage exit code 2, got %d for %v", exitCode(err), err)
 	}
-	if !strings.Contains(stderr.String(), "Required flags:") {
+	if !strings.Contains(stderr.String(), "Required inputs:") {
 		t.Fatalf("stderr missing usage text: %q", stderr.String())
+	}
+}
+
+func TestRunHelpShowsGroupedSizeModelHelp(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	err := run([]string{"-help"}, strings.NewReader(""), &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("help returned error: %v", err)
+	}
+	help := stderr.String()
+	for _, needle := range []string{
+		"radigest\n",
+		"Author:  Gennerick J. Samera (erick.samera@kpu.ca)",
+		"Version: " + version,
+		"License: MIT",
+		"Description: deterministic in-silico restriction digest",
+		"Required inputs:",
+		"Digest behavior:",
+		"Size filtering and scoring:",
+		"Size-selection models:",
+		"normal",
+		"triangular",
+		"soft-window",
+		"Outputs:",
+	} {
+		if !strings.Contains(help, needle) {
+			t.Fatalf("help missing %q; help:\n%s", needle, help)
+		}
 	}
 }
 

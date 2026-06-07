@@ -27,6 +27,7 @@ go.work.sum
 *.fa*
 *.fna*
 *.gff3*
+*.bed*
 *.tsv*
 
 *.go.txt
@@ -36,4 +37,5 @@ go.work.sum
 
 # radigest pair-screen outputs
 pair_screen/
+radigest_design/
 bin/
