@@ -42,8 +42,8 @@ func TestRunWritesDesignOutputs(t *testing.T) {
 		t.Fatalf("run() error = %v\nstderr:\n%s", err, stderr.String())
 	}
 
-	tsvPath := filepath.Join(outDir, "design_pairs.tsv")
-	jsonPath := filepath.Join(outDir, "design_pairs.json")
+	tsvPath := filepath.Join(outDir, "design.tsv")
+	jsonPath := filepath.Join(outDir, "design.json")
 	rows := readTSV(t, tsvPath)
 	if len(rows) != 4 {
 		t.Fatalf("got %d TSV rows, want header + 3 candidates", len(rows))
@@ -61,7 +61,8 @@ func TestRunWritesDesignOutputs(t *testing.T) {
 		t.Fatalf("read JSON: %v", err)
 	}
 	var report struct {
-		SchemaVersion int `json:"schema_version"`
+		SchemaVersion int      `json:"schema_version"`
+		Command       []string `json:"command"`
 		Summary       struct {
 			CandidatePairs int      `json:"candidate_pairs"`
 			FeasiblePairs  int      `json:"feasible_pairs"`
@@ -79,8 +80,51 @@ func TestRunWritesDesignOutputs(t *testing.T) {
 	if report.SchemaVersion != 1 || report.Summary.CandidatePairs != 3 || len(report.Results) != 3 {
 		t.Fatalf("unexpected report summary: %+v", report)
 	}
+	if len(report.Command) == 0 || report.Command[0] != "radigest-design" {
+		t.Fatalf("command[0] = %#v, want radigest-design", report.Command)
+	}
 	if got := report.Summary.BestPair; len(got) != 2 || got[0] != "EcoRI" || got[1] != "MseI" {
 		t.Fatalf("best_pair = %+v, want EcoRI,MseI", got)
+	}
+}
+
+func TestRunAcceptsConciseDesignAliases(t *testing.T) {
+	dir := t.TempDir()
+	fastaPath := filepath.Join(dir, "toy.fa")
+	if err := os.WriteFile(fastaPath, []byte(">ecori_msei_double\nAAAAGAATTCTTAAAGAATTCTTT\n"), 0o644); err != nil {
+		t.Fatalf("write FASTA: %v", err)
+	}
+	outDir := filepath.Join(dir, "design")
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"--ref", fastaPath,
+		"--enzymes", "EcoRI,MseI",
+		"--min", "1",
+		"--max", "100",
+		"--score-min", "1",
+		"--score-max", "100",
+		"--size-model", "hard",
+		"--pct", "45.833333",
+		"--coverage-tolerance-pct", "1",
+		"--depth", "10",
+		"--samples", "1",
+		"--read-layout", "pe",
+		"--read-length", "150",
+		"--flowcell-read-pairs", "1000",
+		"--out-dir", outDir,
+		"--jobs", "1",
+		"--build-workers", "2",
+	}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("run() error = %v\nstderr:\n%s", err, stderr.String())
+	}
+
+	if _, err := os.Stat(filepath.Join(outDir, "design.tsv")); err != nil {
+		t.Fatalf("expected design.tsv: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(outDir, "design.json")); err != nil {
+		t.Fatalf("expected design.json: %v", err)
 	}
 }
 

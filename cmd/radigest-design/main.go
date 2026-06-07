@@ -152,7 +152,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return nil
 	}
 	if cfg.showVersion {
-		_, err := fmt.Fprintf(stdout, "radigest-design-pairs %s\n", version)
+		_, err := fmt.Fprintf(stdout, "radigest-design %s\n", version)
 		return err
 	}
 
@@ -308,14 +308,15 @@ func parseArgs(args []string, stderr io.Writer) (cliConfig, error) {
 	cfg := cliConfig{}
 	defaults := design.DefaultScoreWeights()
 
-	fs := flag.NewFlagSet("radigest-design-pairs", flag.ContinueOnError)
+	fs := flag.NewFlagSet("radigest-design", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 
 	fs.StringVar(&cfg.fastaPath, "fasta", "", "reference FASTA file")
+	fs.StringVar(&cfg.fastaPath, "ref", "", "alias for --fasta")
 	fs.StringVar(&cfg.enzFlag, "enzymes", "", "comma-separated enzymes, a file with enzyme names, or 'all'")
-	fs.StringVar(&cfg.outDir, "out-dir", "radigest_design", "output directory for design_pairs.tsv and design_pairs.json")
-	fs.StringVar(&cfg.tsvPath, "tsv", "", "explicit output TSV path; default <out-dir>/design_pairs.tsv")
-	fs.StringVar(&cfg.jsonPath, "json", "", "explicit output JSON path; default <out-dir>/design_pairs.json")
+	fs.StringVar(&cfg.outDir, "out-dir", "radigest_design", "output directory for design.tsv and design.json")
+	fs.StringVar(&cfg.tsvPath, "tsv", "", "explicit output TSV path; default <out-dir>/design.tsv")
+	fs.StringVar(&cfg.jsonPath, "json", "", "explicit output JSON path; default <out-dir>/design.json")
 	fs.StringVar(&cfg.denominator, "denominator", "non-n", "FASTA denominator for genome percentages: non-n or all")
 	genomeBasesFlag := fs.String("genome-bases", "", "explicit genome denominator, e.g. 2643888753")
 
@@ -339,7 +340,10 @@ func parseArgs(args []string, stderr io.Writer) (cliConfig, error) {
 	fs.Float64Var(&cfg.usableReadFraction, "usable-read-fraction", 1.0, "fraction of reads usable after demultiplexing/QC/deduplication")
 	fs.IntVar(&cfg.samples, "samples", 0, "planned number of samples")
 	fs.Float64Var(&cfg.desiredDepth, "desired-depth", 0, "desired mean read-pair depth per recovered locus")
+	fs.Float64Var(&cfg.desiredDepth, "target-depth", 0, "alias for --desired-depth")
+	fs.Float64Var(&cfg.desiredDepth, "depth", 0, "alias for --desired-depth")
 	fs.Float64Var(&cfg.targetGenomePct, "target-genome-pct", 0, "target weighted genome percentage")
+	fs.Float64Var(&cfg.targetGenomePct, "pct", 0, "alias for --target-genome-pct")
 	fs.Float64Var(&cfg.coverageTolerancePct, "coverage-tolerance-pct", 0.25, "absolute genome-percentage tolerance around --target-genome-pct")
 	fs.StringVar(&cfg.objective, "objective", string(design.ObjectiveBalanced), "ranking objective: balanced, closest-coverage, depth-first, feasible-lowest-coverage, or max-depth")
 	fs.Float64Var(&cfg.weightCoverage, "weight-coverage", defaults.Coverage, "design-loss weight for coverage error")
@@ -356,10 +360,11 @@ func parseArgs(args []string, stderr io.Writer) (cliConfig, error) {
 	fs.BoolVar(&cfg.showVersion, "version", false, "print version and exit")
 
 	fs.Usage = func() {
-		_, _ = fmt.Fprintln(stderr, "radigest-design-pairs — inverse enzyme-pair design from coverage/depth targets")
+		_, _ = fmt.Fprintln(stderr, "radigest-design — inverse enzyme-pair design from coverage/depth targets")
 		_, _ = fmt.Fprintln(stderr)
 		_, _ = fmt.Fprintln(stderr, "Usage:")
-		_, _ = fmt.Fprintln(stderr, "  radigest-design-pairs --fasta ref.fa --enzymes enzymes.txt --target-genome-pct 2.5 --desired-depth 10 --samples 96 --read-length 150 --lane-read-pairs 300M [options]")
+		_, _ = fmt.Fprintln(stderr, "  radigest-design --ref ref.fa --enzymes enzymes.txt --pct 2.5 --depth 10 --samples 96 --read-length 150 --flowcell-read-pairs 300M [options]")
+		_, _ = fmt.Fprintln(stderr, "  radigest-design --fasta ref.fa --enzymes enzymes.txt --target-genome-pct 2.5 --desired-depth 10 --samples 96 --read-length 150 --lane-read-pairs 300M [options]")
 		_, _ = fmt.Fprintln(stderr)
 		fs.PrintDefaults()
 	}
@@ -381,7 +386,7 @@ func parseArgs(args []string, stderr io.Writer) (cliConfig, error) {
 		return cfg, nil
 	}
 	if cfg.fastaPath == "" {
-		return cfg, usageError{err: errors.New("--fasta is required")}
+		return cfg, usageError{err: errors.New("--fasta/--ref is required")}
 	}
 	if cfg.enzFlag == "" {
 		return cfg, usageError{err: errors.New("--enzymes is required")}
@@ -393,10 +398,10 @@ func parseArgs(args []string, stderr io.Writer) (cliConfig, error) {
 		return cfg, usageError{err: errors.New("--samples is required and must be > 0")}
 	}
 	if cfg.desiredDepth <= 0 || math.IsNaN(cfg.desiredDepth) || math.IsInf(cfg.desiredDepth, 0) {
-		return cfg, usageError{err: errors.New("--desired-depth is required and must be a finite value > 0")}
+		return cfg, usageError{err: errors.New("--desired-depth/--depth is required and must be a finite value > 0")}
 	}
 	if cfg.targetGenomePct <= 0 || math.IsNaN(cfg.targetGenomePct) || math.IsInf(cfg.targetGenomePct, 0) {
-		return cfg, usageError{err: errors.New("--target-genome-pct is required and must be a finite value > 0")}
+		return cfg, usageError{err: errors.New("--target-genome-pct/--pct is required and must be a finite value > 0")}
 	}
 	if cfg.coverageTolerancePct < 0 || math.IsNaN(cfg.coverageTolerancePct) || math.IsInf(cfg.coverageTolerancePct, 0) {
 		return cfg, usageError{err: fmt.Errorf("--coverage-tolerance-pct must be >= 0 (got %g)", cfg.coverageTolerancePct)}
@@ -635,7 +640,7 @@ func buildReport(args []string, cfg cliConfig, idx screen.CutIndex, refBases des
 		summary.BestPair = []string{allCandidates[0].EnzymeA, allCandidates[0].EnzymeB}
 	}
 	command := make([]string, 0, len(args)+1)
-	command = append(command, "radigest-design-pairs")
+	command = append(command, "radigest-design")
 	command = append(command, args...)
 
 	digestParams := digestParameters{
@@ -690,10 +695,10 @@ func resolveOutputPaths(cfg cliConfig) (string, string) {
 	tsvPath := strings.TrimSpace(cfg.tsvPath)
 	jsonPath := strings.TrimSpace(cfg.jsonPath)
 	if tsvPath == "" {
-		tsvPath = filepath.Join(cfg.outDir, "design_pairs.tsv")
+		tsvPath = filepath.Join(cfg.outDir, "design.tsv")
 	}
 	if jsonPath == "" {
-		jsonPath = filepath.Join(cfg.outDir, "design_pairs.json")
+		jsonPath = filepath.Join(cfg.outDir, "design.json")
 	}
 	return tsvPath, jsonPath
 }

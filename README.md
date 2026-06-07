@@ -323,10 +323,23 @@ This first-pass planner treats `weighted_fragments` as the number of recovered l
 
 ## Inverse enzyme-pair design
 
-Use `radigest-design-pairs` when the experimental design target is known and the enzyme pair is the unknown. The command screens candidate enzyme pairs with the cached cut-index engine, computes weighted recovered genome percentage, combines each pair with a sequencing budget, and ranks pairs by modeled fit to the requested genome fraction and mean read-pair depth.
+Use `radigest-design` when the experimental design target is known and the enzyme pair is the unknown. The command screens candidate enzyme pairs with the cached cut-index engine, computes weighted recovered genome percentage, combines each pair with a sequencing budget, and ranks pairs by modeled fit to the requested genome fraction and mean read-pair depth.
 
 ```bash
-radigest-design-pairs \
+radigest-design \
+  --ref ref.fa \
+  --pct 2.5 \
+  --enzymes EcoRI,MseI,PstI,ApeKI,NlaIII,MspI \
+  --samples 96 \
+  --flowcell-read-pairs 300M \
+  --depth 10 \
+  --read-length 150
+```
+
+The concise aliases map to the explicit flags: `--ref` = `--fasta`, `--pct` = `--target-genome-pct`, and `--depth` = `--desired-depth`. The longer form remains available for scripts and reports:
+
+```bash
+radigest-design \
   --fasta ref.fa \
   --enzymes candidate_enzymes.txt \
   --target-genome-pct 2.5 \
@@ -348,7 +361,7 @@ radigest-design-pairs \
   --out-dir radigest_design
 ```
 
-The command writes `design_pairs.tsv` and `design_pairs.json`. The TSV is the primary review table; it includes `feasible`, `decision_reason`, `design_score`, generated weighted genome percentage, expected mean depth, depth shortfall, sequencing-budget columns, insert-size diagnostics, and cached-screening provenance. The JSON records the full command, digest parameters, reference denominator, sequencing budget, scoring weights, warnings, and ranked results for reproducibility.
+The command writes `design.tsv` and `design.json`. The TSV is the primary review table; it includes `feasible`, `decision_reason`, `design_score`, generated weighted genome percentage, expected mean depth, depth shortfall, sequencing-budget columns, insert-size diagnostics, and cached-screening provenance. The JSON records the full command, digest parameters, reference denominator, sequencing budget, scoring weights, warnings, and ranked results for reproducibility.
 
 The default `--objective balanced` prioritizes pairs that both match the requested weighted genome percentage within `--coverage-tolerance-pct` and meet `--desired-depth` for the planned sample count. Other objectives are available for sensitivity checks: `closest-coverage`, `depth-first`, `feasible-lowest-coverage`, and `max-depth`.
 
