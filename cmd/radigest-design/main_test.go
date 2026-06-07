@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -49,6 +50,16 @@ func TestRunWritesDesignOutputs(t *testing.T) {
 		t.Fatalf("got %d TSV rows, want header + 3 candidates", len(rows))
 	}
 	header := indexHeader(rows[0])
+	for _, name := range []string{"fit_score", "fit_loss", "predicted_weighted_genome_pct", "target_mean_locus_depth", "predicted_mean_locus_depth"} {
+		if _, ok := header[name]; !ok {
+			t.Fatalf("TSV header missing %s: %#v", name, rows[0])
+		}
+	}
+	for _, oldName := range []string{"design_score", "design_loss", "generated_weighted_genome_pct", "desired_depth", "expected_mean_depth"} {
+		if _, ok := header[oldName]; ok {
+			t.Fatalf("TSV header still contains old field %s: %#v", oldName, rows[0])
+		}
+	}
 	if rows[1][header["enzyme_a"]] != "EcoRI" || rows[1][header["enzyme_b"]] != "MseI" {
 		t.Fatalf("top pair = %s,%s, want EcoRI,MseI", rows[1][header["enzyme_a"]], rows[1][header["enzyme_b"]])
 	}
@@ -82,6 +93,11 @@ func TestRunWritesDesignOutputs(t *testing.T) {
 	}
 	if len(report.Command) == 0 || report.Command[0] != "radigest-design" {
 		t.Fatalf("command[0] = %#v, want radigest-design", report.Command)
+	}
+	for _, needle := range []string{"size_model\thard", "hard_size_window_bp\t1-100", "score_range_bp\t1-100", "size_mean_bp\tNA", "size_sd_bp\tNA"} {
+		if !strings.Contains(stderr.String(), needle) {
+			t.Fatalf("stderr missing %q; stderr:\n%s", needle, stderr.String())
+		}
 	}
 	if got := report.Summary.BestPair; len(got) != 2 || got[0] != "EcoRI" || got[1] != "MseI" {
 		t.Fatalf("best_pair = %+v, want EcoRI,MseI", got)

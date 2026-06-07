@@ -21,6 +21,22 @@ Fast in-silico restriction digest for genomics. Give it a reference FASTA (plain
 
 ---
 
+## Build and install
+
+```bash
+# Public tool surface: radigest, radigest-design, radigest-fit-size-model
+make build
+make install
+
+# Developer/helper surface: cached screening, benchmarks, and legacy helper scripts
+make build-dev
+make install-dev
+```
+
+The default install target keeps user-facing commands small and intentional. `make install-dev` additionally installs `radigest-screen-pairs-cached`, `radigest-bench-screen-cached`, `radigest-screen-pairs`, `radigest-rank-pairs`, and `radigest-plan-depth` for development and diagnostic workflows.
+
+---
+
 ## Quick start
 
 ```bash
@@ -252,7 +268,7 @@ scripts/radigest-screen-pairs \
   --out-dir pair_screen
 ```
 
-The screen writes one JSON summary per pair under `pair_screen/json/` and logs under `pair_screen/logs/`. It requests only JSON summaries, so GFF, TSV, and FASTA artifact outputs are omitted during initial screening.
+The screen writes one JSON summary per pair under `pair_screen/json/` and logs under `pair_screen/logs/`. It requests only JSON summaries, so GFF, BED, TSV, and FASTA artifact outputs are omitted during initial screening.
 
 For diagnostic timing of the cached pair-screen engine itself, use the compiled benchmark binary. It reports separate cut-index build, pair-scoring, JSON-marshalling, and JSON-writing phases as TSV:
 
@@ -376,8 +392,8 @@ radigest-design \
   --out-dir radigest_design
 ```
 
-The command writes `design.tsv` and `design.json`. The TSV is the primary review table; it includes `feasible`, `decision_reason`, `design_score`, generated weighted genome percentage, expected mean depth, depth shortfall, sequencing-budget columns, insert-size diagnostics, and cached-screening provenance. The JSON records the full command, digest parameters, reference denominator, sequencing budget, scoring weights, warnings, and ranked results for reproducibility.
+The command writes `design.tsv` and `design.json`. The TSV is the primary review table; it includes `feasible`, `decision_reason`, `fit_score`, `fit_loss`, `predicted_weighted_genome_pct`, `target_mean_locus_depth`, `predicted_mean_locus_depth`, depth shortfall, sequencing-budget columns, insert-size diagnostics, and cached-screening provenance. The JSON records the full command, digest parameters, reference denominator, sequencing budget, scoring weights, warnings, and ranked results for reproducibility.
 
-The default `--objective balanced` prioritizes pairs that both match the requested weighted genome percentage within `--coverage-tolerance-pct` and meet `--desired-depth` for the planned sample count. Other objectives are available for sensitivity checks: `closest-coverage`, `depth-first`, `feasible-lowest-coverage`, and `max-depth`.
+The default `--objective balanced` prioritizes pairs that both match the requested weighted genome percentage within `--coverage-tolerance-pct` and meet `--desired-depth`/`--depth` for the planned sample count. Other objectives are available for sensitivity checks: `closest-coverage`, `depth-first`, `feasible-lowest-coverage`, and `max-depth`.
 
 This inverse-design command is still a sequence-level model. It does not model methylation sensitivity, partial digestion, star activity, enzyme efficiency, buffer compatibility, empirical digestion rates, or per-locus depth dispersion.

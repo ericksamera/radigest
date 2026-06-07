@@ -33,13 +33,13 @@ type GenomeBases struct {
 }
 
 type SequencingBudget struct {
-	ReadLayout         string  `json:"read_layout"`
-	ReadLength         int     `json:"read_length"`
-	LaneReadPairs      float64 `json:"lane_read_pairs"`
-	Lanes              int     `json:"lanes"`
-	UsableReadFraction float64 `json:"usable_read_fraction"`
-	Samples            int     `json:"samples"`
-	DesiredDepth       float64 `json:"desired_depth"`
+	ReadLayout           string  `json:"read_layout"`
+	ReadLength           int     `json:"read_length"`
+	LaneReadPairs        float64 `json:"lane_read_pairs"`
+	Lanes                int     `json:"lanes"`
+	UsableReadFraction   float64 `json:"usable_read_fraction"`
+	Samples              int     `json:"samples"`
+	TargetMeanLocusDepth float64 `json:"target_mean_locus_depth"`
 }
 
 func (b SequencingBudget) EffectiveReadPairsPerLane() float64 {
@@ -87,17 +87,17 @@ type Candidate struct {
 	Feasible       bool     `json:"feasible"`
 	DecisionReason string   `json:"decision_reason"`
 
-	DesignScore float64 `json:"design_score"`
-	DesignLoss  float64 `json:"design_loss"`
+	FitScore float64 `json:"fit_score"`
+	FitLoss  float64 `json:"fit_loss"`
 
 	TargetGenomePct              float64 `json:"target_genome_pct"`
-	GeneratedWeightedGenomePct   float64 `json:"generated_weighted_genome_pct"`
+	PredictedWeightedGenomePct   float64 `json:"predicted_weighted_genome_pct"`
 	CoverageErrorPctPoints       float64 `json:"coverage_error_pct_points"`
 	CoverageErrorRel             float64 `json:"coverage_error_rel"`
 	OvercoverageRel              float64 `json:"overcoverage_rel"`
 	UndercoverageRel             float64 `json:"undercoverage_rel"`
-	DesiredDepth                 float64 `json:"desired_depth"`
-	ExpectedMeanDepth            float64 `json:"expected_mean_depth"`
+	TargetMeanLocusDepth         float64 `json:"target_mean_locus_depth"`
+	PredictedMeanLocusDepth      float64 `json:"predicted_mean_locus_depth"`
 	DepthMargin                  float64 `json:"depth_margin"`
 	DepthShortfallRel            float64 `json:"depth_shortfall_rel"`
 	ReadPairsPerSample           float64 `json:"read_pairs_per_sample"`
@@ -168,23 +168,23 @@ func EvaluateSummary(summary screen.PairSummary, genomeBases int64, budget Seque
 
 	readPairsPerSample := budget.ReadPairsPerSample()
 	expectedDepth := safeDiv(readPairsPerSample, weightedFragments)
-	requiredPairsPerSample := budget.DesiredDepth * weightedFragments
+	requiredPairsPerSample := budget.TargetMeanLocusDepth * weightedFragments
 
 	coverageDelta := weightedGenomePct - target.TargetGenomePct
 	coverageErrorPctPoints := math.Abs(coverageDelta)
 	coverageErrorRel := safeDiv(coverageErrorPctPoints, target.TargetGenomePct)
 	overcoverageRel := safeDiv(math.Max(0, coverageDelta), target.TargetGenomePct)
 	undercoverageRel := safeDiv(math.Max(0, -coverageDelta), target.TargetGenomePct)
-	depthMargin := expectedDepth - budget.DesiredDepth
-	depthShortfallRel := safeDiv(math.Max(0, -depthMargin), budget.DesiredDepth)
+	depthMargin := expectedDepth - budget.TargetMeanLocusDepth
+	depthShortfallRel := safeDiv(math.Max(0, -depthMargin), budget.TargetMeanLocusDepth)
 
 	adapterThreshold, overlapThreshold, meanInsertCategory := MeanInsertCategory(budget.ReadLayout, budget.ReadLength, summary.SizeSelection.MeanWeightedLength)
 	insertPenalty := InsertPenalty(meanInsertCategory)
 
 	budgetSupportedGenomePct := 0.0
 	budgetSupportedWeightedBases := 0.0
-	if budget.DesiredDepth > 0 && expectedDepth > 0 {
-		supportedFraction := math.Min(1.0, expectedDepth/budget.DesiredDepth)
+	if budget.TargetMeanLocusDepth > 0 && expectedDepth > 0 {
+		supportedFraction := math.Min(1.0, expectedDepth/budget.TargetMeanLocusDepth)
 		budgetSupportedGenomePct = weightedGenomePct * supportedFraction
 		budgetSupportedWeightedBases = weightedBases * supportedFraction
 	}
@@ -201,7 +201,7 @@ func EvaluateSummary(summary screen.PairSummary, genomeBases int64, budget Seque
 	}
 
 	coverageCloseEnough := coverageErrorPctPoints <= target.CoverageTolerancePct
-	depthSufficient := expectedDepth >= budget.DesiredDepth
+	depthSufficient := expectedDepth >= budget.TargetMeanLocusDepth
 	feasible := weightedFragments > 0 && coverageCloseEnough && depthSufficient
 
 	loss := weights.Coverage*coverageErrorRel +
@@ -217,16 +217,16 @@ func EvaluateSummary(summary screen.PairSummary, genomeBases int64, budget Seque
 	candidate := Candidate{
 		Enzymes:                      append([]string(nil), summary.Enzymes...),
 		Feasible:                     feasible,
-		DesignScore:                  score,
-		DesignLoss:                   loss,
+		FitScore:                     score,
+		FitLoss:                      loss,
 		TargetGenomePct:              target.TargetGenomePct,
-		GeneratedWeightedGenomePct:   weightedGenomePct,
+		PredictedWeightedGenomePct:   weightedGenomePct,
 		CoverageErrorPctPoints:       coverageErrorPctPoints,
 		CoverageErrorRel:             coverageErrorRel,
 		OvercoverageRel:              overcoverageRel,
 		UndercoverageRel:             undercoverageRel,
-		DesiredDepth:                 budget.DesiredDepth,
-		ExpectedMeanDepth:            expectedDepth,
+		TargetMeanLocusDepth:         budget.TargetMeanLocusDepth,
+		PredictedMeanLocusDepth:      expectedDepth,
 		DepthMargin:                  depthMargin,
 		DepthShortfallRel:            depthShortfallRel,
 		ReadPairsPerSample:           readPairsPerSample,
@@ -305,15 +305,15 @@ func DecisionReason(c Candidate, target DesignTarget) string {
 	parts := make([]string, 0, 4)
 	if c.CoverageErrorPctPoints <= target.CoverageTolerancePct {
 		parts = append(parts, "matches target coverage")
-	} else if c.GeneratedWeightedGenomePct < c.TargetGenomePct {
-		parts = append(parts, fmt.Sprintf("under target coverage by %.6f pct-points", c.TargetGenomePct-c.GeneratedWeightedGenomePct))
+	} else if c.PredictedWeightedGenomePct < c.TargetGenomePct {
+		parts = append(parts, fmt.Sprintf("under target coverage by %.6f pct-points", c.TargetGenomePct-c.PredictedWeightedGenomePct))
 	} else {
-		parts = append(parts, fmt.Sprintf("over target coverage by %.6f pct-points", c.GeneratedWeightedGenomePct-c.TargetGenomePct))
+		parts = append(parts, fmt.Sprintf("over target coverage by %.6f pct-points", c.PredictedWeightedGenomePct-c.TargetGenomePct))
 	}
-	if c.ExpectedMeanDepth >= c.DesiredDepth {
-		parts = append(parts, "meets desired depth")
+	if c.PredictedMeanLocusDepth >= c.TargetMeanLocusDepth {
+		parts = append(parts, "meets target mean locus depth")
 	} else {
-		parts = append(parts, fmt.Sprintf("depth shortfall %.6f", c.DesiredDepth-c.ExpectedMeanDepth))
+		parts = append(parts, fmt.Sprintf("depth shortfall %.6f", c.TargetMeanLocusDepth-c.PredictedMeanLocusDepth))
 	}
 	if c.MeanInsertCategory == "mean_lt_read_length_adapter_risk" || c.MeanInsertCategory == "mean_lt_2_read_lengths_overlap_risk" {
 		parts = append(parts, c.MeanInsertCategory)
@@ -344,12 +344,12 @@ func SortCandidates(candidates []Candidate, objective Objective) {
 			if a.Feasible != b.Feasible {
 				return a.Feasible
 			}
-			if a.GeneratedWeightedGenomePct != b.GeneratedWeightedGenomePct {
-				return a.GeneratedWeightedGenomePct < b.GeneratedWeightedGenomePct
+			if a.PredictedWeightedGenomePct != b.PredictedWeightedGenomePct {
+				return a.PredictedWeightedGenomePct < b.PredictedWeightedGenomePct
 			}
 		case ObjectiveMaxDepth:
-			if a.ExpectedMeanDepth != b.ExpectedMeanDepth {
-				return a.ExpectedMeanDepth > b.ExpectedMeanDepth
+			if a.PredictedMeanLocusDepth != b.PredictedMeanLocusDepth {
+				return a.PredictedMeanLocusDepth > b.PredictedMeanLocusDepth
 			}
 			if a.CoverageErrorRel != b.CoverageErrorRel {
 				return a.CoverageErrorRel < b.CoverageErrorRel
@@ -358,15 +358,15 @@ func SortCandidates(candidates []Candidate, objective Objective) {
 			if a.Feasible != b.Feasible {
 				return a.Feasible
 			}
-			if a.DesignLoss != b.DesignLoss {
-				return a.DesignLoss < b.DesignLoss
+			if a.FitLoss != b.FitLoss {
+				return a.FitLoss < b.FitLoss
 			}
 			if a.CoverageErrorRel != b.CoverageErrorRel {
 				return a.CoverageErrorRel < b.CoverageErrorRel
 			}
 		}
-		if a.DesignLoss != b.DesignLoss {
-			return a.DesignLoss < b.DesignLoss
+		if a.FitLoss != b.FitLoss {
+			return a.FitLoss < b.FitLoss
 		}
 		if a.EnzymeA != b.EnzymeA {
 			return a.EnzymeA < b.EnzymeA

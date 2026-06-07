@@ -207,6 +207,9 @@ func run(args []string, stdout, stderr io.Writer) error {
 	if _, err := fmt.Fprintf(stderr, "genome_bases\t%d\tdenominator\t%s\n", genomeBases, cfg.denominator); err != nil {
 		return err
 	}
+	if err := writeDesignSizeSelectionSummary(stderr, selector.Config()); err != nil {
+		return err
+	}
 
 	buildWorkers := resolveBuildWorkers(cfg.buildWorkers, cfg.jobs, cfg.threads, len(enzymes))
 	idx, err := screen.BuildCutIndexFromFASTAParallel(cfg.fastaPath, enzymes, digest.Options{StrictCuts: cfg.strictCuts}, buildWorkers)
@@ -238,13 +241,13 @@ func run(args []string, stdout, stderr io.Writer) error {
 	}
 
 	budget := design.SequencingBudget{
-		ReadLayout:         cfg.readLayout,
-		ReadLength:         cfg.readLength,
-		LaneReadPairs:      cfg.laneReadPairs,
-		Lanes:              cfg.lanes,
-		UsableReadFraction: cfg.usableReadFraction,
-		Samples:            cfg.samples,
-		DesiredDepth:       cfg.desiredDepth,
+		ReadLayout:           cfg.readLayout,
+		ReadLength:           cfg.readLength,
+		LaneReadPairs:        cfg.laneReadPairs,
+		Lanes:                cfg.lanes,
+		UsableReadFraction:   cfg.usableReadFraction,
+		Samples:              cfg.samples,
+		TargetMeanLocusDepth: cfg.desiredDepth,
 	}
 	target := design.DesignTarget{
 		TargetGenomePct:      cfg.targetGenomePct,
@@ -276,7 +279,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 		}
 	}
 	if feasiblePairs == 0 {
-		warnings = append(warnings, "no enzyme pair matched both target coverage tolerance and desired depth under the supplied budget")
+		warnings = append(warnings, "no enzyme pair matched both target coverage tolerance and target mean locus depth under the supplied budget")
 	}
 	if len(candidates) == 0 {
 		warnings = append(warnings, "no candidate pairs were scored")
@@ -339,17 +342,17 @@ func parseArgs(args []string, stderr io.Writer) (cliConfig, error) {
 	fs.IntVar(&cfg.lanes, "lanes", 1, "number of lanes in the sequencing budget")
 	fs.Float64Var(&cfg.usableReadFraction, "usable-read-fraction", 1.0, "fraction of reads usable after demultiplexing/QC/deduplication")
 	fs.IntVar(&cfg.samples, "samples", 0, "planned number of samples")
-	fs.Float64Var(&cfg.desiredDepth, "desired-depth", 0, "desired mean read-pair depth per recovered locus")
+	fs.Float64Var(&cfg.desiredDepth, "desired-depth", 0, "target mean read-pair depth per recovered locus")
 	fs.Float64Var(&cfg.desiredDepth, "target-depth", 0, "alias for --desired-depth")
 	fs.Float64Var(&cfg.desiredDepth, "depth", 0, "alias for --desired-depth")
 	fs.Float64Var(&cfg.targetGenomePct, "target-genome-pct", 0, "target weighted genome percentage")
 	fs.Float64Var(&cfg.targetGenomePct, "pct", 0, "alias for --target-genome-pct")
 	fs.Float64Var(&cfg.coverageTolerancePct, "coverage-tolerance-pct", 0.25, "absolute genome-percentage tolerance around --target-genome-pct")
 	fs.StringVar(&cfg.objective, "objective", string(design.ObjectiveBalanced), "ranking objective: balanced, closest-coverage, depth-first, feasible-lowest-coverage, or max-depth")
-	fs.Float64Var(&cfg.weightCoverage, "weight-coverage", defaults.Coverage, "design-loss weight for coverage error")
-	fs.Float64Var(&cfg.weightDepth, "weight-depth", defaults.Depth, "design-loss weight for depth shortfall")
-	fs.Float64Var(&cfg.weightOvercoverage, "weight-overcoverage", defaults.Overcoverage, "additional design-loss weight for overcoverage")
-	fs.Float64Var(&cfg.weightInsert, "weight-insert", defaults.Insert, "design-loss weight for insert-size risk")
+	fs.Float64Var(&cfg.weightCoverage, "weight-coverage", defaults.Coverage, "fit-loss weight for coverage error")
+	fs.Float64Var(&cfg.weightDepth, "weight-depth", defaults.Depth, "fit-loss weight for depth shortfall")
+	fs.Float64Var(&cfg.weightOvercoverage, "weight-overcoverage", defaults.Overcoverage, "additional fit-loss weight for overcoverage")
+	fs.Float64Var(&cfg.weightInsert, "weight-insert", defaults.Insert, "fit-loss weight for insert-size risk")
 
 	fs.IntVar(&cfg.jobs, "jobs", 0, "parallel pair-scoring workers (default: --threads)")
 	fs.IntVar(&cfg.threads, "threads", runtime.NumCPU(), "worker count alias used when --jobs is not set")
@@ -467,6 +470,47 @@ func parseArgs(args []string, stderr io.Writer) (cliConfig, error) {
 		}
 	}
 	return cfg, nil
+}
+
+func writeDesignSizeSelectionSummary(stderr io.Writer, cfg sizeselect.Config) error {
+	if _, err := fmt.Fprintf(stderr, "size_model\t%s\n", cfg.Model); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(stderr, "hard_size_window_bp\t%d-%d\n", cfg.Min, cfg.Max); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(stderr, "score_range_bp\t%d-%d\n", cfg.ScoreMin, cfg.ScoreMax); err != nil {
+		return err
+	}
+
+	mean := "NA"
+	sd := "NA"
+	switch cfg.Model {
+	case sizeselect.ModelNormal:
+		mean = formatDesignStderrFloat(cfg.Mean)
+		sd = formatDesignStderrFloat(cfg.SD)
+	case sizeselect.ModelTriangular:
+		mean = formatDesignStderrFloat(cfg.Mean)
+	}
+	if _, err := fmt.Fprintf(stderr, "size_mean_bp\t%s\n", mean); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(stderr, "size_sd_bp\t%s\n", sd); err != nil {
+		return err
+	}
+	if cfg.Model == sizeselect.ModelSoftWindow {
+		if _, err := fmt.Fprintf(stderr, "size_edge_sd_bp\t%s\n", formatDesignStderrFloat(cfg.EdgeSD)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func formatDesignStderrFloat(value float64) string {
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		return "NA"
+	}
+	return strconv.FormatFloat(value, 'f', -1, 64)
 }
 
 func readEnzymeNames(value string) ([]string, error) {
@@ -765,16 +809,16 @@ func designTSVHeader() []string {
 		"enzyme_b",
 		"feasible",
 		"decision_reason",
-		"design_score",
-		"design_loss",
+		"fit_score",
+		"fit_loss",
 		"target_genome_pct",
-		"generated_weighted_genome_pct",
+		"predicted_weighted_genome_pct",
 		"coverage_error_pct_points",
 		"coverage_error_rel",
 		"overcoverage_rel",
 		"undercoverage_rel",
-		"desired_depth",
-		"expected_mean_depth",
+		"target_mean_locus_depth",
+		"predicted_mean_locus_depth",
 		"depth_margin",
 		"depth_shortfall_rel",
 		"read_pairs_per_sample",
@@ -806,16 +850,16 @@ func candidateTSVRow(c design.Candidate) []string {
 		c.EnzymeB,
 		strconv.FormatBool(c.Feasible),
 		c.DecisionReason,
-		formatFloat(c.DesignScore),
-		formatFloat(c.DesignLoss),
+		formatFloat(c.FitScore),
+		formatFloat(c.FitLoss),
 		formatFloat(c.TargetGenomePct),
-		formatFloat(c.GeneratedWeightedGenomePct),
+		formatFloat(c.PredictedWeightedGenomePct),
 		formatFloat(c.CoverageErrorPctPoints),
 		formatFloat(c.CoverageErrorRel),
 		formatFloat(c.OvercoverageRel),
 		formatFloat(c.UndercoverageRel),
-		formatFloat(c.DesiredDepth),
-		formatFloat(c.ExpectedMeanDepth),
+		formatFloat(c.TargetMeanLocusDepth),
+		formatFloat(c.PredictedMeanLocusDepth),
 		formatFloat(c.DepthMargin),
 		formatFloat(c.DepthShortfallRel),
 		formatFloat(c.ReadPairsPerSample),
