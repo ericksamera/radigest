@@ -146,6 +146,20 @@ func TestRunWritesDesignOutputs(t *testing.T) {
 	if !strings.Contains(stderr.String(), "design_summary_tsv\t"+summaryTSVPath) {
 		t.Fatalf("stderr missing design summary path %q; stderr:\n%s", summaryTSVPath, stderr.String())
 	}
+	for _, needle := range []string{
+		"Recommendation:",
+		"Recommended pair: EcoRI,MseI",
+		"Status: feasible",
+		"Why: predicted",
+		"Budget:",
+		"Main caution:",
+		"Fit score:",
+		"Files: " + summaryTSVPath + ", " + reportPath,
+	} {
+		if !strings.Contains(stderr.String(), needle) {
+			t.Fatalf("stderr missing terminal summary text %q; stderr:\n%s", needle, stderr.String())
+		}
+	}
 	if got := report.Summary.BestPair; len(got) != 2 || got[0] != "EcoRI" || got[1] != "MseI" {
 		t.Fatalf("best_pair = %+v, want EcoRI,MseI", got)
 	}
@@ -220,6 +234,7 @@ func TestRunHelpShowsGroupedDesignHelp(t *testing.T) {
 		"soft-window",
 		"Outputs written:",
 		"design.report.txt",
+		"terminal summary",
 	} {
 		if !strings.Contains(help, needle) {
 			t.Fatalf("help missing %q; help:\n%s", needle, help)

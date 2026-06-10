@@ -320,6 +320,9 @@ func run(args []string, stdout, stderr io.Writer) error {
 	if _, err := fmt.Fprintf(stderr, "design_report\t%s\n", reportPath); err != nil {
 		return err
 	}
+	if err := writeTerminalRecommendationSummary(stderr, report); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -1095,6 +1098,163 @@ func designReportRows(report designReport) []reportRow {
 	)
 
 	return rows
+}
+
+func writeTerminalRecommendationSummary(w io.Writer, report designReport) error {
+	if w == nil {
+		return nil
+	}
+	if _, err := fmt.Fprintln(w); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(w, "Recommendation:"); err != nil {
+		return err
+	}
+	if len(report.Results) == 0 {
+		if _, err := fmt.Fprintln(w, "Recommended pair: none"); err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintln(w, "Status: no candidate pairs were scored"); err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintf(w, "Files: %s, %s\n", report.Outputs.SummaryTSV, report.Outputs.Report); err != nil {
+			return err
+		}
+		return nil
+	}
+
+	best := report.Results[0]
+	status := "not feasible"
+	if best.Feasible {
+		status = "feasible"
+	}
+
+	lines := []string{
+		fmt.Sprintf("Recommended pair: %s", enzymePair(best)),
+		fmt.Sprintf("Status: %s", status),
+		fmt.Sprintf(
+			"Why: predicted %s%% genome vs target %s%%; predicted %sx mean locus depth vs target %sx; %s",
+			formatTerminalFloat(best.PredictedWeightedGenomePct, 2),
+			formatTerminalFloat(best.TargetGenomePct, 2),
+			formatTerminalFloat(best.PredictedMeanLocusDepth, 2),
+			formatTerminalFloat(best.TargetMeanLocusDepth, 2),
+			formatTerminalDecisionReason(best.DecisionReason),
+		),
+		fmt.Sprintf(
+			"Budget: %s, %s read pairs, %s usable fraction; %s read pairs/sample; max samples at target: %d",
+			formatSampleCount(report.Sequencing.Samples),
+			formatReadPairCount(report.Sequencing.LaneReadPairs*float64(report.Sequencing.Lanes)),
+			formatTerminalFloat(report.Sequencing.UsableReadFraction, 2),
+			formatReadPairCount(best.ReadPairsPerSample),
+			best.MaxSamplesTotalFullTarget,
+		),
+		fmt.Sprintf("Main caution: %s", terminalInsertCaution(best, report.Sequencing)),
+		fmt.Sprintf("Fit score: %s", formatTerminalFloat(best.FitScore, 3)),
+		fmt.Sprintf("Files: %s, %s", report.Outputs.SummaryTSV, report.Outputs.Report),
+	}
+	for _, line := range lines {
+		if _, err := fmt.Fprintln(w, line); err != nil {
+			return err
+		}
+	}
+	if len(report.Warnings) > 0 {
+		if _, err := fmt.Fprintf(w, "Warning: %s\n", report.Warnings[0]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func formatTerminalDecisionReason(reason string) string {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return "no decision reason recorded"
+	}
+	replacer := strings.NewReplacer(
+		"mean_lt_read_length_adapter_risk", "mean insert below read length",
+		"mean_lt_2_read_lengths_overlap_risk", "mean insert below 2 read lengths",
+		"mean_ge_2_read_lengths", "mean insert at least 2 read lengths",
+		"mean_ge_read_length", "mean insert at least read length",
+		"pct-points", "percentage points",
+	)
+	return replacer.Replace(reason)
+}
+
+func terminalInsertCaution(candidate design.Candidate, budget design.SequencingBudget) string {
+	mean := formatTerminalFloat(candidate.MeanWeightedLength, 1)
+	readLength := budget.ReadLength
+	readLayout := strings.ToLower(strings.TrimSpace(budget.ReadLayout))
+	switch candidate.MeanInsertCategory {
+	case "mean_lt_read_length_adapter_risk":
+		if readLength > 0 {
+			return fmt.Sprintf("mean insert %s bp is below read length (%d bp); adapter read-through likely", mean, readLength)
+		}
+		return fmt.Sprintf("mean insert %s bp is below read length; adapter read-through likely", mean)
+	case "mean_lt_2_read_lengths_overlap_risk":
+		if readLayout == "pe" && readLength > 0 {
+			return fmt.Sprintf("mean insert %s bp is below 2x%d bp; paired-end overlap likely", mean, readLength)
+		}
+		return fmt.Sprintf("mean insert %s bp may be shorter than the read layout expects", mean)
+	case "mean_ge_2_read_lengths":
+		if readLayout == "pe" && readLength > 0 {
+			return fmt.Sprintf("none; mean insert %s bp is >= 2x%d bp", mean, readLength)
+		}
+		return fmt.Sprintf("none; mean insert %s bp is in the expected range", mean)
+	case "mean_ge_read_length":
+		if readLength > 0 {
+			return fmt.Sprintf("none; mean insert %s bp is >= read length (%d bp)", mean, readLength)
+		}
+		return fmt.Sprintf("none; mean insert %s bp is in the expected range", mean)
+	case "unknown", "":
+		return "mean insert could not be estimated"
+	default:
+		return candidate.MeanInsertCategory
+	}
+}
+
+func formatSampleCount(samples int) string {
+	if samples == 1 {
+		return "1 sample"
+	}
+	return fmt.Sprintf("%d samples", samples)
+}
+
+func formatReadPairCount(value float64) string {
+	if value <= 0 || math.IsNaN(value) || math.IsInf(value, 0) {
+		return "NA"
+	}
+	units := []struct {
+		suffix string
+		factor float64
+	}{
+		{suffix: "T", factor: 1e12},
+		{suffix: "G", factor: 1e9},
+		{suffix: "M", factor: 1e6},
+		{suffix: "K", factor: 1e3},
+	}
+	for _, unit := range units {
+		if math.Abs(value) >= unit.factor {
+			return formatTerminalFloat(value/unit.factor, 2) + unit.suffix
+		}
+	}
+	return formatTerminalFloat(value, 0)
+}
+
+func formatTerminalFloat(value float64, decimals int) string {
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		return "NA"
+	}
+	if decimals < 0 {
+		decimals = 0
+	}
+	text := strconv.FormatFloat(value, 'f', decimals, 64)
+	if strings.Contains(text, ".") {
+		text = strings.TrimRight(strings.TrimRight(text, "0"), ".")
+	}
+	if text == "-0" {
+		return "0"
+	}
+	return text
 }
 
 func writeJSONAtomic(path string, value any) error {
